@@ -8,6 +8,8 @@ from pydrake.all import (
     StartMeshcat,
 )
 
+import matplotlib.pyplot as plt
+
 from underactuated.underactuated import ConfigureParser
 from underactuated.underactuated.multibody import MakePidStateProjectionMatrix
 
@@ -65,6 +67,5 @@ def run_pid_control():
     meshcat.StartRecording()
     simulator.AdvanceTo(3.0)
     meshcat.PublishRecording()
-
-
+    
 run_pid_control()
