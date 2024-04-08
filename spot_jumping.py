@@ -72,7 +72,7 @@ def run_pid_control():
     meshcat.StartRecording()
     simulator.AdvanceTo(3.0)
     meshcat.PublishRecording()
-# run_pid_control()
+run_pid_control()
 
 ###################################################################################################
 
@@ -101,8 +101,6 @@ spot_context_ad = spot.CreateDefaultContext()
 nq = spot.num_positions()
 nf = 3 # components for friction force (3d for spot's feet)
 friction = 0.2
-
-# print(spot.GetActuatorNames())
 
 def manipulator_equations(vars):
     '''
