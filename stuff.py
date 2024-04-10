@@ -47,3 +47,36 @@ def calc_foot_jacobian(plant_, context, foot_frame, wrt_frame, jacobian_var):
         ground_frame
     )
     return J
+
+
+
+######################################################
+N = 41
+dirtran = DirectTranscription(
+    plant,
+    plant_context,
+    num_time_samples=N,
+    input_port_index=plant.GetInputPort('spot_actuation').get_index(),
+)
+prog = dirtran.prog()
+
+q = dirtran.state()
+q_vars = prog.decision_variables()[:N*nq]
+q_vars = q_vars.reshape((41, 37))
+
+u = dirtran.input()
+u_vars = prog.decision_variables()[N*nq:]
+u_vars = u_vars.reshape((41, 12))
+
+t = dirtran.time()
+
+for i in range(N):
+    AddUnitQuaternionConstraintOnPlant(plant, q_vars[i, :plant.num_positions()], prog)
+
+u_lower_limit = plant.GetEffortLowerLimits()
+u_upper_limit = plant.GetEffortUpperLimits()
+for i in range(nu):
+    dirtran.AddConstraintToAllKnotPoints(u[i] <= u_upper_limit[i])
+    dirtran.AddConstraintToAllKnotPoints(u[i] >= u_lower_limit[i])
+
+result = Solve(prog)
