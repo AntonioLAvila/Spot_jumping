@@ -11,6 +11,7 @@ from pydrake.all import (
     SnoptSolver,
     JacobianWrtVariable,
     AddUnitQuaternionConstraintOnPlant,
+    eq,
 )
 from underactuated.underactuated import ConfigureParser
 
@@ -31,6 +32,7 @@ plant = builder.plant()
 plant.set_discrete_contact_approximation(DiscreteContactApproximation.kLagged)
 plant.Finalize()
 plant_ad = plant.ToAutoDiffXd()
+builder = builder.builder()
 
 # create contexts to work with
 plant_context = plant.CreateDefaultContext()
@@ -42,23 +44,31 @@ nu = plant.num_actuators()
 nv = plant.num_velocities()
 nf = 3 # 3d friction
 q0 = plant.GetDefaultPositions()
-
+effort_ub = plant.GetEffortUpperLimits()
+effort_lb = plant.GetEffortLowerLimits()
+h_min = 0.01
+h_max = 0.1
+h = 0.01
 
 ##### Jump Optimization
 prog = MathematicalProgram()
 
-N_launch = 101
-N_flight = 200
+N_launch = 201
+N_flight = 500
 N = N_launch + N_flight
 
-q = prog.NewContinuousVariables(rows=N, cols=nq, name="q")
-v = prog.NewContinuousVariables(rows=N, cols=nv, name="v")
+q = prog.NewContinuousVariables(rows=N+1, cols=nq, name="q")
+v = prog.NewContinuousVariables(rows=N+1, cols=nv, name="v")
 q_ddot = prog.NewContinuousVariables(rows=N, cols=nv, name="q_ddot")
 u = prog.NewContinuousVariables(rows=N, cols=nu, name="u")
 fl_friction = prog.NewContinuousVariables(rows=N, cols=nf, name="fl_friction")
 fr_friction = prog.NewContinuousVariables(rows=N, cols=nf, name="fr_friction")
 rl_friction = prog.NewContinuousVariables(rows=N, cols=nf, name="rl_friction")
 rr_friction = prog.NewContinuousVariables(rows=N, cols=nf, name="rr_friction")
+
+# timestep
+h = prog.NewContinuousVariables(N, name="h")
+prog.AddBoundingBoxConstraint([h_min] * N, [h_max] * N, h)
 
 
 # Manipulator Equations
@@ -85,19 +95,19 @@ def manipulator_equations(vars):
     Cv = m_plant.CalcBiasTerm(m_context)
     tauG = m_plant.CalcGravityGeneralizedForces(m_context)
 
-    # Jacobian of feet for contact modeling
+    # Jacobian of feet for contact
     world_frame = m_plant.GetFrameByName("ground")
     J_fl = calc_foot_jacobian(m_plant, m_context, m_plant.GetFrameByName("front_left_lower_leg"), world_frame, [0,0,0])
     J_fr = calc_foot_jacobian(m_plant, m_context, m_plant.GetFrameByName("front_right_lower_leg"), world_frame, [0,0,0])
     J_rl = calc_foot_jacobian(m_plant, m_context, m_plant.GetFrameByName("rear_left_lower_leg"), world_frame, [0,0,0])
     J_rr = calc_foot_jacobian(m_plant, m_context, m_plant.GetFrameByName("rear_right_lower_leg"), world_frame, [0,0,0])
 
-    return M@qdd + Cv - tauG - (J_fl.T@f_fl)[1:] - (J_fr.T@f_fr)[1:] - (J_rl.T@f_rl)[1:] - (J_rr.T@f_rr)[1:] # should be equal to 0
+    return M@qdd + Cv - tauG - J_fl.T@f_fl - J_fr.T@f_fr - J_rl.T@f_rl - J_rr.T@f_rr # should be equal to 0
 
 def calc_foot_jacobian(plt, ctxt, foot_frame, world_frame, position_in_frame):
     J = plt.CalcJacobianTranslationalVelocity(
         ctxt,
-        JacobianWrtVariable.kQDot,
+        JacobianWrtVariable.kV,
         foot_frame,
         position_in_frame,
         world_frame,
@@ -105,18 +115,34 @@ def calc_foot_jacobian(plt, ctxt, foot_frame, world_frame, position_in_frame):
     )
     return J
 
+# initial position
+prog.AddLinearEqualityConstraint(q[0], q0)
+prog.AddLinearEqualityConstraint(v[0], np.zeros_like(v[0]))
+
+# Final quaterinons
+AddUnitQuaternionConstraintOnPlant(plant, q[N, :], prog)
+AddUnitQuaternionConstraintOnPlant(plant_ad, q[N, :], prog)
+
 for n in range(N):
-    vars = np.concatenate((q[n], v[n], q_ddot[n], fl_friction[n], fr_friction[n], rl_friction[n], rr_friction[n]))
+    # manipulator eqations
+    vars = np.concatenate((q[n+1], v[n+1], q_ddot[n], fl_friction[n], fr_friction[n], rl_friction[n], rr_friction[n]))
     prog.AddConstraint(manipulator_equations, lb=[0]*nv, ub=[0]*nv, vars=vars)
 
+    # unit quaternions
     AddUnitQuaternionConstraintOnPlant(plant, q[n, :], prog)
     AddUnitQuaternionConstraintOnPlant(plant_ad, q[n, :], prog)
 
-    prog.AddLinearEqualityConstraint(q[n], q0)
+    # Actuator limits
+    for i in range(nu):
+        prog.AddLinearConstraint(u[n, i] >= effort_lb[i])
+        prog.AddLinearConstraint(u[n, i] <= effort_ub[i])
 
+    # velocity/accel constraints
+    prog.AddConstraint(eq(q[n + 1][1:], q[n][1:] + h[n] * v[n + 1]))
+    prog.AddConstraint(eq(v[n + 1], v[n] + h[n] * q_ddot[n]))
 
 
 solver = SnoptSolver()
 result = solver.Solve(prog)
 print(result.is_success())
-print(result.GetSolution(q))
+print(result.GetSolution(q[-1]))
