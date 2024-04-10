@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import time
 from pid_standing import run_pid_control
 from pydrake.all import (
     AutoDiffXd,
@@ -53,8 +54,8 @@ h = 0.01
 ##### Jump Optimization
 prog = MathematicalProgram()
 
-N_launch = 201
-N_flight = 500
+N_launch = 21
+N_flight = 50
 N = N_launch + N_flight
 
 q = prog.NewContinuousVariables(rows=N+1, cols=nq, name="q")
@@ -119,6 +120,10 @@ def calc_foot_jacobian(plt, ctxt, foot_frame, world_frame, position_in_frame):
 prog.AddLinearEqualityConstraint(q[0], q0)
 prog.AddLinearEqualityConstraint(v[0], np.zeros_like(v[0]))
 
+# final position
+prog.AddLinearEqualityConstraint(q[-1], q0)
+prog.AddLinearEqualityConstraint(v[-1], np.zeros_like(v[0]))
+
 # Final quaterinons
 AddUnitQuaternionConstraintOnPlant(plant, q[N, :], prog)
 AddUnitQuaternionConstraintOnPlant(plant_ad, q[N, :], prog)
@@ -143,6 +148,12 @@ for n in range(N):
 
 
 solver = SnoptSolver()
+
+print("Solving")
+start = time.time()
 result = solver.Solve(prog)
+print(time.time() - start)
+
+
 print(result.is_success())
 print(result.GetSolution(q[-1]))
