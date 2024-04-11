@@ -225,7 +225,7 @@ print(result.is_success())
 print("Time to solve:", time.time() - start)
 
 # visualize
-print("visualizing")
+print("Visualizing")
 context = diagram.CreateDefaultContext()
 plant_context = plant.GetMyContextFromRoot(context)
 t_sol = np.cumsum(result.GetSolution(h))
