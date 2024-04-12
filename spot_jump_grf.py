@@ -151,10 +151,13 @@ for n in range(N-1):
 CoM = prog.NewContinuousVariables(3, N, "CoM")
 CoMd = prog.NewContinuousVariables(3, N, "CoMd")
 CoMdd = prog.NewContinuousVariables(3, N-1, "CoMdd")
+prog.AddBoundingBoxConstraint(0.125, np.inf, CoM[2, :]) # don't go under the ground
 prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, 0]) # Initial CoM position = q0
 prog.AddBoundingBoxConstraint(0, 0, CoMd[:, 0]) # Initial CoM vel = 0
 prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, -1]) # Final CoM position = q0
-# prog.AddBoundingBoxConstraint(0, 0, CoMd[:, -1]) # Final CoM vel = 0
+prog.AddBoundingBoxConstraint(0, 0, CoMd[:, -1]) # Final CoM vel = 0
+for n in range(N): # Initial guess is a parabola in z
+    prog.SetInitialGuess(CoM[2, n], -n*(n-N))
 # CoM dynamics
 for n in range(N-1):
     prog.AddConstraint(eq(CoM[:,n+1], CoM[:,n] + h[n]*CoMd[:,n])) # Position
