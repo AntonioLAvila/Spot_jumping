@@ -61,3 +61,7 @@ def run_pid_control(meshcat):
     meshcat.StartRecording()
     simulator.AdvanceTo(3.0)
     meshcat.PublishRecording()
+
+if __name__ == "__main__":
+    A = [1,2,3,4,5,6,7,8,9]
+    print(A[-3:])

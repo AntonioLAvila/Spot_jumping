@@ -16,6 +16,8 @@ from pydrake.all import (
     ExtractValue,
     JacobianWrtVariable,
     InitializeAutoDiff,
+    PositionConstraint,
+    PiecewisePolynomial,
     eq,
 )
 from underactuated.underactuated import ConfigureParser
@@ -51,8 +53,9 @@ nq = plant.num_positions()
 nv = plant.num_velocities()
 q0 = plant.GetDefaultPositions()
 h_min = 0.01
-h_max = 0.1
+h_max = 0.5
 mu = 1.0
+jump_height = 1.0
 
 ad_plant = plant.ToAutoDiffXd()
 
@@ -68,9 +71,11 @@ foot_frame = [
 ]
 
 N_windup = 50
+N_land = 10
 N = 201
 in_stance = np.zeros((4, N))
-in_stance[:, :N_windup]
+in_stance[:, :N_windup] = 1
+in_stance[:, -N_land:] = 1
 
 
 ###########   JUMP OPTIMIZATION   ###########
@@ -80,7 +85,7 @@ prog = MathematicalProgram()
 h = prog.NewContinuousVariables(N-1, "h")
 prog.AddBoundingBoxConstraint(h_min, h_max, h)
 
-context = [plant.CreateDefaultContext() for _ in range(N)]  # Create one context per time step (to maximize cache hits)
+context = [plant.CreateDefaultContext() for _ in range(N)]
 q = prog.NewContinuousVariables(nq, N, "q")
 v = prog.NewContinuousVariables(nv, N, "v")
 
@@ -109,7 +114,7 @@ for n in range(N):
     prog.SetInitialGuess(q[:, n], q0)
 
 # Velocity dynamics constraints
-ad_velocity_dynamics_context = [ad_plant.CreateDefaultContext() for _ in range(N)] # Make a new autodiff context for this constraint (to maximize cache hits)
+ad_velocity_dynamics_context = [ad_plant.CreateDefaultContext() for _ in range(N)]
 def velocity_dynamics_constraint(vars, context_index):
     h, q, v, qn = np.split(vars, [1, 1+nq, 1+nq+nv])
     if isinstance(vars[0], AutoDiffXd):
@@ -149,7 +154,7 @@ CoMdd = prog.NewContinuousVariables(3, N-1, "CoMdd")
 prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, 0]) # Initial CoM position = q0
 prog.AddBoundingBoxConstraint(0, 0, CoMd[:, 0]) # Initial CoM vel = 0
 prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, -1]) # Final CoM position = q0
-prog.AddBoundingBoxConstraint(0, 0, CoMd[:, -1]) # Final CoM vel = 0
+# prog.AddBoundingBoxConstraint(0, 0, CoMd[:, -1]) # Final CoM vel = 0
 # CoM dynamics
 for n in range(N-1):
     prog.AddConstraint(eq(CoM[:,n+1], CoM[:,n] + h[n]*CoMd[:,n])) # Position
@@ -164,7 +169,7 @@ prog.SetInitialGuess(Hd, np.zeros((3, N-1))) # Start not spinning
 def angular_momentum_constraint(vars, context_index):
     q, CoM, Hd, contact_force = np.split(vars, [nq, 3+nq, 6+nq])
     contact_force = contact_force.reshape(3, 4, order="F")
-    if isinstance(vars[0], AutoDiffXd): #TODO change to use ad_plant
+    if isinstance(vars[0], AutoDiffXd):
         dq = ExtractGradient(q)
         q = ExtractValue(q)
         if not np.array_equal(q, plant.GetPositions(context[context_index])):
@@ -200,34 +205,141 @@ def angular_momentum_constraint(vars, context_index):
             )
             torque += np.cross(p_WF.reshape(3) - CoM, contact_force[:, i])
     return Hd - torque # Should be 0
+for n in range(N-1):
+    prog.AddConstraint(eq(H[:,n+1], H[:,n] + h[n]*Hd[:,n]))
+    Fn = np.concatenate([contact_force[i][:,n] for i in range(4)])
+    prog.AddConstraint(
+        partial(angular_momentum_constraint, context_index=n),
+        lb=[0]*3,
+        ub=[0]*3,
+        vars=np.concatenate((q[:, n], CoM[:, n], Hd[:, n], Fn)),
+    )
 
+CoM_constraint_context = [ad_plant.CreateDefaultContext() for _ in range(N)]
+def CoM_constraint(vars, context_index):
+    qv, CoM, H = np.split(vars, [nq+nv, nq+nv+3])
+    if isinstance(vars[0], AutoDiffXd):
+        if not autoDiffArrayEqual(qv, ad_plant.GetPositionsAndVelocities(CoM_constraint_context[context_index])):
+            ad_plant.SetPositionsAndVelocities(CoM_constraint_context[context_index], qv)
+        CoM_q = ad_plant.CalcCenterOfMassPositionInWorld(CoM_constraint_context[context_index], [spot])
+        H_qv = ad_plant.CalcSpatialMomentumInWorldAboutPoint(CoM_constraint_context[context_index], [spot], CoM).rotational()
+    else:
+        if not np.array_equal(qv, plant.GetPositionsAndVelocities(CoM_constraint_context[context_index])):
+            plant.SetPositionsAndVelocities(CoM_constraint_context[context_index], qv)
+        CoM_q = plant.CalcCenterOfMassPositionInWorld(context[context_index], [spot])
+        H_qv = plant.CalcSpatialMomentumInWorldAboutPoint(CoM_constraint_context[context_index], [spot], CoM).rotational()
+    return np.concatenate((CoM_q - CoM, H_qv - H)) # Should be [0,0,0,0,0,0]
+for n in range(N):
+    prog.AddConstraint(
+        partial(CoM_constraint, context_index=n),
+        lb=[0]*6,
+        ub=[0]*6,
+        vars=np.concatenate((q[:,n], v[:,n], CoM[:,n], H[:,n])),
+    )
 
+# Kinematic constraints
+def fixed_position_constraint(vars, context_index, frame):
+    q, qn = np.split(vars, [nq])
+    if not np.array_equal(q, plant.GetPositions(context[context_index])):
+        plant.SetPositions(context[context_index], q)
+    if not np.array_equal(qn, plant.GetPositions(context[context_index+1])):
+        plant.SetPositions(context[context_index+1], qn)
+    p_WF = plant.CalcPointsPositions(
+        context[context_index],
+        frame,
+        [0, 0, 0],
+        plant.world_frame(),
+    )
+    p_WF_n = plant.CalcPointsPositions(
+        context[context_index+1],
+        frame,
+        [0, 0, 0],
+        plant.world_frame(),
+    )
+    if isinstance(vars[0], AutoDiffXd):
+        J_WF = plant.CalcJacobianTranslationalVelocity(
+            context[context_index],
+            JacobianWrtVariable.kQDot,
+            frame,
+            [0,0,0],
+            plant.world_frame(),
+            plant.world_frame(),   
+        )
+        J_WF_n = plant.CalcJacobianTranslationalVelocity(
+            context[context_index+1],
+            JacobianWrtVariable.kQDot,
+            frame,
+            [0,0,0],
+            plant.world_frame(),
+            plant.world_frame(),   
+        )
+        return InitializeAutoDiff(p_WF_n - p_WF, J_WF_n@ExtractGradient(qn) - J_WF@ExtractGradient(q))
+    else:
+        return p_WF_n - p_WF # Should be 0
 
-
+for i in range(4):
+    for n in range(N):
+        if in_stance[i, n]:
+            # Feet on ground
+            prog.AddConstraint(
+                PositionConstraint(
+                    plant,
+                    plant.world_frame(),
+                    [-np.inf, -np.inf, 0],
+                    [np.inf, np.inf, 0],
+                    foot_frame[i],
+                    [0, 0, 0],
+                    context[n],
+                ),
+                q[:, n],
+            )
+            # Feet on ground don't move
+            if n>0 and in_stance[i, n-1]:
+                prog.AddConstraint(
+                    partial(fixed_position_constraint, context_index=n-1, frame=foot_frame[i]),
+                    lb=[0]*3,
+                    ub=[0]*3,
+                    vars=np.concatenate((q[:,n-1], q[:,n])),
+                )
+        else:
+            # Feet somewhere off ground
+            min_clearance = 0.1
+            prog.AddConstraint(
+                PositionConstraint(
+                    plant,
+                    plant.world_frame(),
+                    [-np.inf, -np.inf, min_clearance],
+                    [np.inf, np.inf, np.inf],
+                    foot_frame[i],
+                    [0, 0, 0],
+                    context[n],
+                ),
+                q[:, n],
+            )
 
 # ###########   SOLVE   ###########
-# solver = SnoptSolver()
-# print("Solving")
-# start = time.time()
-# result = solver.Solve(prog)
-# print(result.is_success())
-# print("Time to solve:", time.time() - start)
+solver = SnoptSolver()
+print("Solving")
+start = time.time()
+result = solver.Solve(prog)
+print(result.is_success())
+print("Time to solve:", time.time() - start)
 
 # ###########   VISUALIZE   ###########
-# print("Visualizing")
-# context = diagram.CreateDefaultContext()
-# plant_context = plant.GetMyContextFromRoot(context)
-# t_sol = np.cumsum(result.GetSolution(h))
-# q_sol = PiecewisePolynomial.FirstOrderHold(t_sol, result.GetSolution(q).T)
-# visualizer.StartRecording()
-# t0 = t_sol[0]
-# tf = t_sol[-1]
-# for t in t_sol:
-#     context.SetTime(t)
-#     plant.SetPositions(plant_context, q_sol.value(t))
-#     diagram.ForcedPublish(context)
-# visualizer.StopRecording()
-# visualizer.PublishRecording()
-
+print("Visualizing")
+context = diagram.CreateDefaultContext()
+plant_context = plant.GetMyContextFromRoot(context)
+t_sol = np.cumsum(np.concatenate(([0], result.GetSolution(h))))
+q_sol = PiecewisePolynomial.FirstOrderHold(t_sol, result.GetSolution(q))
+visualizer.StartRecording()
+t0 = t_sol[0]
+tf = t_sol[-1]
+for t in t_sol:
+    context.SetTime(t)
+    plant.SetPositions(plant_context, q_sol.value(t))
+    diagram.ForcedPublish(context)
+visualizer.StopRecording()
+visualizer.PublishRecording()
+# while True: pass # Keep the viz up
 
 
