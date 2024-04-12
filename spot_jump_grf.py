@@ -13,6 +13,10 @@ from pydrake.all import (
     RotationMatrix,
     AutoDiffXd,
     ExtractGradient,
+    ExtractValue,
+    JacobianWrtVariable,
+    InitializeAutoDiff,
+    eq,
 )
 from underactuated.underactuated import ConfigureParser
 
@@ -122,7 +126,7 @@ for n in range(N-1):
         partial(velocity_dynamics_constraint, context_index=n),
         lb=[0]*nv,
         ub=[0]*nv,
-        vars=np.concatenate((h[n], q[:,n], v[:,n], q[:,n+1])),
+        vars=np.concatenate(([h[n]], q[:,n], v[:,n], q[:,n+1])),
     )
 
 # Contact force constraints
@@ -142,6 +146,62 @@ for n in range(N-1):
 CoM = prog.NewContinuousVariables(3, N, "CoM")
 CoMd = prog.NewContinuousVariables(3, N, "CoMd")
 CoMdd = prog.NewContinuousVariables(3, N-1, "CoMdd")
+prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, 0]) # Initial CoM position = q0
+prog.AddBoundingBoxConstraint(0, 0, CoMd[:, 0]) # Initial CoM vel = 0
+prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, -1]) # Final CoM position = q0
+prog.AddBoundingBoxConstraint(0, 0, CoMd[:, -1]) # Final CoM vel = 0
+# CoM dynamics
+for n in range(N-1):
+    prog.AddConstraint(eq(CoM[:,n+1], CoM[:,n] + h[n]*CoMd[:,n])) # Position
+    prog.AddConstraint(eq(CoMd[:,n+1], CoMd[:,n] + h[n]*CoMdd[:,n])) # Velocity
+    prog.AddConstraint(eq(total_mass*CoMdd[:,n], sum(contact_force[i][:,n] for i in range(4)) + total_mass*gravity)) # ma = Σff + fg
+
+# Center of mass angular constraints
+H = prog.NewContinuousVariables(3, N, "H")
+Hd = prog.NewContinuousVariables(3, N-1, "Hdot")
+prog.SetInitialGuess(H, np.zeros((3, N))) # Start unturned
+prog.SetInitialGuess(Hd, np.zeros((3, N-1))) # Start not spinning
+def angular_momentum_constraint(vars, context_index):
+    q, CoM, Hd, contact_force = np.split(vars, [nq, 3+nq, 6+nq])
+    contact_force = contact_force.reshape(3, 4, order="F")
+    if isinstance(vars[0], AutoDiffXd): #TODO change to use ad_plant
+        dq = ExtractGradient(q)
+        q = ExtractValue(q)
+        if not np.array_equal(q, plant.GetPositions(context[context_index])):
+            plant.SetPositions(context[context_index], q)
+        torque = np.zeros(3)
+        for i in range(4):
+            p_WF = plant.CalcPointsPositions(
+                context[context_index],
+                foot_frame[i],
+                [0,0,0],
+                plant.world_frame(),
+            )
+            Jq_WF = plant.CalcJacobianTranslationalVelocity(
+                context[context_index],
+                JacobianWrtVariable.kQDot,
+                foot_frame[i],
+                [0,0,0],
+                plant.world_frame(),
+                plant.world_frame(),
+            )
+            ad_p_WF = InitializeAutoDiff(p_WF, Jq_WF@dq)
+            torque = torque + np.cross(ad_p_WF.reshape(3) - CoM, contact_force[:, i])
+    else:
+        if not np.array_equal(q, plant.GetPositions(context[context_index])):
+            plant.SetPositions(context[context_index], q)
+        torque = np.zeros(3)
+        for i in range(4):
+            p_WF = plant.CalcPointsPositions(
+                context[context_index],
+                foot_frame[i],
+                [0,0,0],
+                plant.world_frame(),
+            )
+            torque += np.cross(p_WF.reshape(3) - CoM, contact_force[:, i])
+    return Hd - torque # Should be 0
+
+
 
 
 
