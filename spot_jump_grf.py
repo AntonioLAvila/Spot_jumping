@@ -1,156 +1,173 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import time
 from pid_standing import run_pid_control
+from functools import partial
 from pydrake.all import (
-    AutoDiffXd,
-    DiscreteContactApproximation,
     RobotDiagramBuilder,
     StartMeshcat,
-    plot_system_graphviz,
     MathematicalProgram,
     SnoptSolver,
-    JacobianWrtVariable,
     AddUnitQuaternionConstraintOnPlant,
-    eq,
-    AddDefaultVisualization,
-    PiecewisePolynomial,
     MeshcatVisualizer,
+    OrientationConstraint,
+    RotationMatrix,
+    AutoDiffXd,
+    ExtractGradient,
 )
 from underactuated.underactuated import ConfigureParser
 
-# Stand
+def autoDiffArrayEqual(a, b):
+    return np.array_equal(a, b) and np.array_equal(ExtractGradient(a), ExtractGradient(b))
+
 meshcat = StartMeshcat()
 # run_pid_control(meshcat)
 
-###################################################################################################
-
+###########   INITIALIZATION   ###########
 robot_builder = RobotDiagramBuilder(time_step=1e-4)
-parser = robot_builder.parser()
+plant = robot_builder.plant()
 scene_graph = robot_builder.scene_graph()
+parser = robot_builder.parser()
 ConfigureParser(parser)
 (spot,) = parser.AddModelsFromUrl("package://underactuated/models/spot/spot.dmd.yaml")
 parser.AddModelsFromUrl("package://underactuated/models/littledog/ground.urdf")
-plant = robot_builder.plant()
-plant.set_discrete_contact_approximation(DiscreteContactApproximation.kLagged)
+# plant.set_discrete_contact_approximation(DiscreteContactApproximation.kLagged)
 plant.Finalize()
-plant_ad = plant.ToAutoDiffXd()
 builder = robot_builder.builder()
 visualizer = MeshcatVisualizer.AddToBuilder(builder, scene_graph, meshcat=meshcat)
 
 diagram = robot_builder.Build()
-
-plant_context = plant.CreateDefaultContext()
-plant_context_ad = plant_ad.CreateDefaultContext()
-
-
 diagram_context = diagram.CreateDefaultContext()
-ctx = plant.GetMyContextFromRoot(diagram_context)
+plant_context = plant.GetMyContextFromRoot(diagram_context)
 plant.SetPositions(plant_context, plant.GetDefaultPositions())
 diagram.ForcedPublish(diagram_context)
 
 
 
 nq = plant.num_positions()
-nu = plant.num_actuators()
 nv = plant.num_velocities()
-nf = 3 # 3d friction
 q0 = plant.GetDefaultPositions()
-effort_ub = plant.GetEffortUpperLimits()
-effort_lb = plant.GetEffortLowerLimits()
-position_ub = plant.GetPositionUpperLimits()
-position_lb = plant.GetPositionLowerLimits()
-velocity_ub = plant.GetVelocityUpperLimits()
-velocity_lb = plant.GetVelocityLowerLimits()
-accel_ub = plant.GetAccelerationUpperLimits()
-accel_lb = plant.GetAccelerationLowerLimits()
 h_min = 0.01
 h_max = 0.1
-h = 0.01
 mu = 1.0
 
-##### Jump Optimization
+ad_plant = plant.ToAutoDiffXd()
+
+body_frame = plant.GetFrameByName("body")
+total_mass = plant.CalcTotalMass(plant_context, [spot])
+gravity = plant.gravity_field().gravity_vector()
+
+foot_frame = [
+    plant.GetFrameByName("front_left_lower_leg"),
+    plant.GetFrameByName("front_right_lower_leg"),
+    plant.GetFrameByName("rear_left_lower_leg"),
+    plant.GetFrameByName("rear_right_lower_leg"),
+]
+
+N_windup = 50
+N = 201
+in_stance = np.zeros((4, N))
+in_stance[:, :N_windup]
+
+
+###########   JUMP OPTIMIZATION   ###########
 prog = MathematicalProgram()
 
-N_launch = 21
-N_flight = 50
-N = N_launch + N_flight
+# Time steps
+h = prog.NewContinuousVariables(N-1, "h")
+prog.AddBoundingBoxConstraint(h_min, h_max, h)
 
-q = prog.NewContinuousVariables(rows=N, cols=nq, name="q")
-v = prog.NewContinuousVariables(rows=N, cols=nv, name="v")
-vd = prog.NewContinuousVariables(rows=N, cols=nv, name="vd")
-u = prog.NewContinuousVariables(rows=N, cols=nu, name="u")
-f_fl = prog.NewContinuousVariables(rows=N, cols=nf, name="fl_friction")
-f_fr = prog.NewContinuousVariables(rows=N, cols=nf, name="fr_friction")
-f_rl = prog.NewContinuousVariables(rows=N, cols=nf, name="rl_friction")
-f_rr = prog.NewContinuousVariables(rows=N, cols=nf, name="rr_friction")
+context = [plant.CreateDefaultContext() for _ in range(N)]  # Create one context per time step (to maximize cache hits)
+q = prog.NewContinuousVariables(nq, N, "q")
+v = prog.NewContinuousVariables(nv, N, "v")
 
-# timestep
-h = prog.NewContinuousVariables(N, name="h")
-prog.AddBoundingBoxConstraint([h_min]*N, [h_max]*N, h)
-
-# initial position
-prog.AddLinearEqualityConstraint(q[0], q0)
-prog.AddLinearEqualityConstraint(v[0], np.zeros_like(v[0]))
-
-# final position
-prog.AddLinearEqualityConstraint(q[-1], q0)
-
+# Constraints invariant of time
 for n in range(N):
-    # unit quaternions
-    AddUnitQuaternionConstraintOnPlant(plant, q[n], prog)
-    AddUnitQuaternionConstraintOnPlant(plant_ad, q[n], prog)
+    # Unit quaternions
+    AddUnitQuaternionConstraintOnPlant(plant, q[:, n], prog)
+    # Joint position limits
+    prog.AddBoundingBoxConstraint(plant.GetPositionLowerLimits(), plant.GetPositionUpperLimits(), q[:, n])
+    # Joint velocity limits
+    prog.AddBoundingBoxConstraint(plant.GetVelocityLowerLimits(), plant.GetVelocityUpperLimits(), v[:, n])
+    # Body orientation
+    prog.AddConstraint(
+        OrientationConstraint(
+            plant,
+            body_frame,
+            RotationMatrix(),
+            plant.world_frame(),
+            RotationMatrix(),
+            0.1,
+            context[n],
+        ),
+        q[:, n],
+    )
+    # Initial guess is the default position
+    prog.SetInitialGuess(q[:, n], q0)
 
-    # joint limits
-    for j in range(nq):
-        prog.AddLinearConstraint(q[n, j] >= position_lb[j])
-        prog.AddLinearConstraint(q[n, j] <= position_ub[j])
-
-    # Actuator limits
-    for i in range(nu):
-        prog.AddLinearConstraint(u[n, i] >= effort_lb[i])
-        prog.AddLinearConstraint(u[n, i] <= effort_ub[i])
-
-    # velocity, acceleration limits
-    for i in range(nv):
-        prog.AddLinearConstraint(v[n, i] >= velocity_lb[i])
-        prog.AddLinearConstraint(v[n, i] <= velocity_ub[i])
-
-        prog.AddLinearConstraint(vd[n, i] >= accel_lb[i])
-        prog.AddLinearConstraint(vd[n, i] <= accel_ub[i])
-
+# Velocity dynamics constraints
+ad_velocity_dynamics_context = [ad_plant.CreateDefaultContext() for _ in range(N)] # Make a new autodiff context for this constraint (to maximize cache hits)
+def velocity_dynamics_constraint(vars, context_index):
+    h, q, v, qn = np.split(vars, [1, 1+nq, 1+nq+nv])
+    if isinstance(vars[0], AutoDiffXd):
+        if not autoDiffArrayEqual(q, ad_plant.GetPositions(ad_velocity_dynamics_context[context_index])):
+            ad_plant.SetPositions(ad_velocity_dynamics_context[context_index], q)
+        v_qd = ad_plant.MapQDotToVelocity(ad_velocity_dynamics_context[context_index], (qn-q)/h)
+    else:
+        if not np.array_equal(q, plant.GetPositions(context[context_index])):
+            plant.SetPositions(context[context_index], q)
+        v_qd = plant.MapQDotToVelocity(context[context_index], (qn-q)/h)
+    return v - v_qd # Should be 0
 for n in range(N-1):
-    # velocity/accel constraints
-    prog.AddConstraint(eq(q[n + 1][1:], q[n][1:] + h[n] * v[n + 1]))
-    prog.AddConstraint(eq(v[n + 1], v[n] + h[n] * vd[n]))
+    prog.AddConstraint(
+        partial(velocity_dynamics_constraint, context_index=n),
+        lb=[0]*nv,
+        ub=[0]*nv,
+        vars=np.concatenate((h[n], q[:,n], v[:,n], q[:,n+1])),
+    )
 
-# def continuous_centroidal_dynamics(X_dyn):
-#     # returns X_dyn_dot
-#     assert X_dyn.size == 3+3+
+# Contact force constraints
+contact_force = [prog.NewContinuousVariables(3, N-1, f"foot{i}_contact_force") for i in range(4)]
+for n in range(N-1):
+    for foot in range(4):
+        f_normal = contact_force[foot][2, n]
+        # Friction pyramid TODO change to friction cone
+        prog.AddLinearConstraint(contact_force[foot][0, n] <= mu*f_normal)
+        prog.AddLinearConstraint(contact_force[foot][0, n] >= -mu*f_normal)
+        prog.AddLinearConstraint(contact_force[foot][1, n] <= mu*f_normal)
+        prog.AddLinearConstraint(contact_force[foot][1, n] >= -mu*f_normal)
+        # Normal force >=0 if in stance 0 otherwise
+        prog.AddBoundingBoxConstraint(0, in_stance[foot, n] * 4 * 9.81 * total_mass, f_normal)
+
+# Center of mass translational constraints
+CoM = prog.NewContinuousVariables(3, N, "CoM")
+CoMd = prog.NewContinuousVariables(3, N, "CoMd")
+CoMdd = prog.NewContinuousVariables(3, N-1, "CoMdd")
 
 
-print(plant.CalcSpatialMomentumInWorldAboutPoint(plant_context, [0,0,0]))
 
-solver = SnoptSolver()
+# ###########   SOLVE   ###########
+# solver = SnoptSolver()
+# print("Solving")
+# start = time.time()
+# result = solver.Solve(prog)
+# print(result.is_success())
+# print("Time to solve:", time.time() - start)
 
-print("Solving")
-start = time.time()
-result = solver.Solve(prog)
-print(result.is_success())
-print("Time to solve:", time.time() - start)
+# ###########   VISUALIZE   ###########
+# print("Visualizing")
+# context = diagram.CreateDefaultContext()
+# plant_context = plant.GetMyContextFromRoot(context)
+# t_sol = np.cumsum(result.GetSolution(h))
+# q_sol = PiecewisePolynomial.FirstOrderHold(t_sol, result.GetSolution(q).T)
+# visualizer.StartRecording()
+# t0 = t_sol[0]
+# tf = t_sol[-1]
+# for t in t_sol:
+#     context.SetTime(t)
+#     plant.SetPositions(plant_context, q_sol.value(t))
+#     diagram.ForcedPublish(context)
+# visualizer.StopRecording()
+# visualizer.PublishRecording()
 
-# visualize
-print("Visualizing")
-context = diagram.CreateDefaultContext()
-plant_context = plant.GetMyContextFromRoot(context)
-t_sol = np.cumsum(result.GetSolution(h))
-q_sol = PiecewisePolynomial.FirstOrderHold(t_sol, result.GetSolution(q).T)
-visualizer.StartRecording()
-t0 = t_sol[0]
-tf = t_sol[-1]
-for t in t_sol:
-    context.SetTime(t)
-    plant.SetPositions(plant_context, q_sol.value(t))
-    diagram.ForcedPublish(context)
-visualizer.StopRecording()
-visualizer.PublishRecording()
+
+
