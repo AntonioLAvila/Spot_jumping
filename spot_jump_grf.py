@@ -3,6 +3,7 @@ import time
 from pid_standing import run_pid_control
 from functools import partial
 from pydrake.all import (
+    DiscreteContactApproximation,
     RobotDiagramBuilder,
     StartMeshcat,
     MathematicalProgram,
@@ -36,7 +37,7 @@ parser = robot_builder.parser()
 ConfigureParser(parser)
 (spot,) = parser.AddModelsFromUrl("package://underactuated/models/spot/spot.dmd.yaml")
 parser.AddModelsFromUrl("package://underactuated/models/littledog/ground.urdf")
-# plant.set_discrete_contact_approximation(DiscreteContactApproximation.kLagged)
+plant.set_discrete_contact_approximation(DiscreteContactApproximation.kLagged)
 plant.Finalize()
 builder = robot_builder.builder()
 visualizer = MeshcatVisualizer.AddToBuilder(builder, scene_graph, meshcat=meshcat)
@@ -53,7 +54,7 @@ nq = plant.num_positions()
 nv = plant.num_velocities()
 q0 = plant.GetDefaultPositions()
 h_min = 0.01
-h_max = 0.5
+h_max = 0.1
 mu = 1.0
 jump_height = 1.0
 
@@ -71,11 +72,9 @@ foot_frame = [
 ]
 
 N_windup = 50
-N_land = 10
 N = 201
-in_stance = np.zeros((4, N))
-in_stance[:, :N_windup] = 1
-in_stance[:, -N_land:] = 1
+in_stance = np.zeros((4, N), dtype=bool)
+in_stance[:, :N_windup] = True
 
 
 ###########   JUMP OPTIMIZATION   ###########
@@ -98,34 +97,34 @@ for n in range(N):
     # Joint velocity limits
     prog.AddBoundingBoxConstraint(plant.GetVelocityLowerLimits(), plant.GetVelocityUpperLimits(), v[:, n])
     # Body orientation
-    prog.AddConstraint(
-        OrientationConstraint(
-            plant,
-            body_frame,
-            RotationMatrix(),
-            plant.world_frame(),
-            RotationMatrix(),
-            0.1,
-            context[n],
-        ),
-        q[:, n],
-    )
+    # prog.AddConstraint(
+    #     OrientationConstraint(
+    #         plant,
+    #         body_frame,
+    #         RotationMatrix(),
+    #         plant.world_frame(),
+    #         RotationMatrix(),
+    #         np.pi/6,
+    #         context[n],
+    #     ),
+    #     q[:, n],
+    # )
     # Initial guess is the default position
     prog.SetInitialGuess(q[:, n], q0)
 
 # Velocity dynamics constraints
 ad_velocity_dynamics_context = [ad_plant.CreateDefaultContext() for _ in range(N)]
 def velocity_dynamics_constraint(vars, context_index):
-    h, q, v, qn = np.split(vars, [1, 1+nq, 1+nq+nv])
+    h_, q_, v_, qn_ = np.split(vars, [1, 1+nq, 1+nq+nv])
     if isinstance(vars[0], AutoDiffXd):
-        if not autoDiffArrayEqual(q, ad_plant.GetPositions(ad_velocity_dynamics_context[context_index])):
-            ad_plant.SetPositions(ad_velocity_dynamics_context[context_index], q)
-        v_qd = ad_plant.MapQDotToVelocity(ad_velocity_dynamics_context[context_index], (qn-q)/h)
+        if not autoDiffArrayEqual(q_, ad_plant.GetPositions(ad_velocity_dynamics_context[context_index])):
+            ad_plant.SetPositions(ad_velocity_dynamics_context[context_index], q_)
+        v_qd = ad_plant.MapQDotToVelocity(ad_velocity_dynamics_context[context_index], (qn_-q_)/h_)
     else:
-        if not np.array_equal(q, plant.GetPositions(context[context_index])):
-            plant.SetPositions(context[context_index], q)
-        v_qd = plant.MapQDotToVelocity(context[context_index], (qn-q)/h)
-    return v - v_qd # Should be 0
+        if not np.array_equal(q_, plant.GetPositions(context[context_index])):
+            plant.SetPositions(context[context_index], q_)
+        v_qd = plant.MapQDotToVelocity(context[context_index], (qn_-q_)/h_)
+    return v_ - v_qd # Should be 0
 for n in range(N-1):
     prog.AddConstraint(
         partial(velocity_dynamics_constraint, context_index=n),
@@ -136,16 +135,20 @@ for n in range(N-1):
 
 # Contact force constraints
 contact_force = [prog.NewContinuousVariables(3, N-1, f"foot{i}_contact_force") for i in range(4)]
-for n in range(N-1):
-    for foot in range(4):
-        f_normal = contact_force[foot][2, n]
+for foot in range(4):
+    for n in range(N-1):
         # Friction pyramid TODO change to friction cone
-        prog.AddLinearConstraint(contact_force[foot][0, n] <= mu*f_normal)
-        prog.AddLinearConstraint(contact_force[foot][0, n] >= -mu*f_normal)
-        prog.AddLinearConstraint(contact_force[foot][1, n] <= mu*f_normal)
-        prog.AddLinearConstraint(contact_force[foot][1, n] >= -mu*f_normal)
+        prog.AddLinearConstraint(contact_force[foot][0, n] <= mu*contact_force[foot][2, n])
+        prog.AddLinearConstraint(contact_force[foot][0, n] >= -mu*contact_force[foot][2, n])
+        prog.AddLinearConstraint(contact_force[foot][1, n] <= mu*contact_force[foot][2, n])
+        prog.AddLinearConstraint(contact_force[foot][1, n] >= -mu*contact_force[foot][2, n])
         # Normal force >=0 if in stance 0 otherwise
-        prog.AddBoundingBoxConstraint(0, in_stance[foot, n] * 4 * 9.81 * total_mass, f_normal)
+        if in_stance[foot, n]:
+            prog.AddBoundingBoxConstraint(0, np.inf, contact_force[foot][2, n])
+            prog.AddBoundingBoxConstraint(0, 4*9.81*total_mass, contact_force[foot][2, n])
+        else:
+            prog.AddBoundingBoxConstraint(0, 0, contact_force[foot][2, n])
+
 
 # Center of mass translational constraints
 CoM = prog.NewContinuousVariables(3, N, "CoM")
@@ -154,15 +157,17 @@ CoMdd = prog.NewContinuousVariables(3, N-1, "CoMdd")
 prog.AddBoundingBoxConstraint(0.125, np.inf, CoM[2, :]) # don't go under the ground
 prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, 0]) # Initial CoM position = q0
 prog.AddBoundingBoxConstraint(0, 0, CoMd[:, 0]) # Initial CoM vel = 0
-prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, -1]) # Final CoM position = q0
-prog.AddBoundingBoxConstraint(0, 0, CoMd[:, -1]) # Final CoM vel = 0
-for n in range(N): # Initial guess is a parabola in z
-    prog.SetInitialGuess(CoM[2, n], -n*(n-N))
+# prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, -1]) # Final CoM position = q0
+# prog.AddBoundingBoxConstraint(0, 0, CoMd[:, -1]) # Final CoM vel = 0
+# for n in range(N): # Initial guess is a parabola
+#     if n <= N_windup:
+#         prog.SetInitialGuess(CoM[2, n], 0)
+#     prog.SetInitialGuess(CoM[2, n], -(n-sum(h[i] for i in range(N_windup)))*(n-N))
 # CoM dynamics
 for n in range(N-1):
     prog.AddConstraint(eq(CoM[:,n+1], CoM[:,n] + h[n]*CoMd[:,n])) # Position
     prog.AddConstraint(eq(CoMd[:,n+1], CoMd[:,n] + h[n]*CoMdd[:,n])) # Velocity
-    prog.AddConstraint(eq(total_mass*CoMdd[:,n], sum(contact_force[i][:,n] for i in range(4)) + total_mass*gravity)) # ma = Σff + fg
+    prog.AddConstraint(eq(total_mass*CoMdd[:,n], sum(contact_force[i][:,n] for i in range(4)) + total_mass*gravity)) # ma = Σf + fg
 
 # Center of mass angular constraints
 H = prog.NewContinuousVariables(3, N, "H")
@@ -170,13 +175,13 @@ Hd = prog.NewContinuousVariables(3, N-1, "Hdot")
 prog.SetInitialGuess(H, np.zeros((3, N))) # Start unturned
 prog.SetInitialGuess(Hd, np.zeros((3, N-1))) # Start not spinning
 def angular_momentum_constraint(vars, context_index):
-    q, CoM, Hd, contact_force = np.split(vars, [nq, 3+nq, 6+nq])
-    contact_force = contact_force.reshape(3, 4, order="F")
+    q_, CoM_, Hd_, contact_force_ = np.split(vars, [nq, 3+nq, 6+nq])
+    contact_force_ = contact_force_.reshape(3, 4, order="F")
     if isinstance(vars[0], AutoDiffXd):
-        dq = ExtractGradient(q)
-        q = ExtractValue(q)
-        if not np.array_equal(q, plant.GetPositions(context[context_index])):
-            plant.SetPositions(context[context_index], q)
+        dq = ExtractGradient(q_)
+        q_ = ExtractValue(q_)
+        if not np.array_equal(q_, plant.GetPositions(context[context_index])):
+            plant.SetPositions(context[context_index], q_)
         torque = np.zeros(3)
         for i in range(4):
             p_WF = plant.CalcPointsPositions(
@@ -194,10 +199,10 @@ def angular_momentum_constraint(vars, context_index):
                 plant.world_frame(),
             )
             ad_p_WF = InitializeAutoDiff(p_WF, Jq_WF@dq)
-            torque = torque + np.cross(ad_p_WF.reshape(3) - CoM, contact_force[:, i])
+            torque = torque + np.cross(ad_p_WF.reshape(3) - CoM_, contact_force_[:, i])
     else:
-        if not np.array_equal(q, plant.GetPositions(context[context_index])):
-            plant.SetPositions(context[context_index], q)
+        if not np.array_equal(q_, plant.GetPositions(context[context_index])):
+            plant.SetPositions(context[context_index], q_)
         torque = np.zeros(3)
         for i in range(4):
             p_WF = plant.CalcPointsPositions(
@@ -206,8 +211,8 @@ def angular_momentum_constraint(vars, context_index):
                 [0,0,0],
                 plant.world_frame(),
             )
-            torque += np.cross(p_WF.reshape(3) - CoM, contact_force[:, i])
-    return Hd - torque # Should be 0
+            torque += np.cross(p_WF.reshape(3) - CoM_, contact_force_[:, i])
+    return Hd_ - torque # Should be 0
 for n in range(N-1):
     prog.AddConstraint(eq(H[:,n+1], H[:,n] + h[n]*Hd[:,n]))
     Fn = np.concatenate([contact_force[i][:,n] for i in range(4)])

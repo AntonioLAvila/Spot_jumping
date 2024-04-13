@@ -63,5 +63,5 @@ def run_pid_control(meshcat):
     meshcat.PublishRecording()
 
 if __name__ == "__main__":
-    A = [1,2,3,4,5,6,7,8,9]
-    print(A[-3:])
+    in_stance = np.zeros(6)
+    print(786*in_stance)
