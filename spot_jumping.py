@@ -45,14 +45,21 @@ visualizer = MeshcatVisualizer.AddToBuilder(builder, scene_graph, meshcat=meshca
 diagram = robot_builder.Build()
 diagram_context = diagram.CreateDefaultContext()
 plant_context = plant.GetMyContextFromRoot(diagram_context)
-plant.SetPositions(plant_context, plant.GetDefaultPositions())
+q0 = plant.GetDefaultPositions()
+q0[6] -= 0.02889683
+# print(plant.CalcPointsPositions(
+#     plant_context,
+#     plant.GetFrameByName("front_left_lower_leg"),
+#     [0,0,-0.3365-0.036],
+#     plant.world_frame(),
+# ))
+plant.SetPositions(plant_context, q0)
 diagram.ForcedPublish(diagram_context)
 
 
 
 nq = plant.num_positions()
 nv = plant.num_velocities()
-q0 = plant.GetDefaultPositions()
 mu = 1.0
 
 ad_plant = plant.ToAutoDiffXd()
@@ -67,9 +74,10 @@ foot_frame = [
     plant.GetFrameByName("rear_left_lower_leg"),
     plant.GetFrameByName("rear_right_lower_leg"),
 ]
+foot_in_leg = [0,0,-0.3365-0.036]
 
 N_stance = 60
-N_flight = 60
+N_flight = 61
 T_stance = 3
 h_stance = T_stance/(N_stance-1)
 max_jump_time = 3
@@ -84,7 +92,7 @@ prog = MathematicalProgram()
 # Time steps
 h = prog.NewContinuousVariables(N-1, "h")
 prog.AddBoundingBoxConstraint(h_stance, h_stance, h[:N_stance])
-prog.AddBoundingBoxConstraint(0.01, max_jump_time/N_flight, h[N_stance:])
+prog.AddBoundingBoxConstraint(0.015, max_jump_time/N_flight, h[N_stance:])
 
 
 context = [plant.CreateDefaultContext() for _ in range(N)]
@@ -135,7 +143,7 @@ for foot in range(4):
         # Normal force >=0 if in stance 0 otherwise
         if in_stance[foot, n]:
             prog.AddBoundingBoxConstraint(0, np.inf, contact_force[foot][2, n])
-            prog.AddBoundingBoxConstraint(0, 4*9.81*total_mass, contact_force[foot][2, n])
+            # prog.AddBoundingBoxConstraint(0, 4*9.81*total_mass, contact_force[foot][2, n])
         else:
             prog.AddBoundingBoxConstraint(0, 0, contact_force[foot][2, n])
 
@@ -144,15 +152,9 @@ for foot in range(4):
 CoM = prog.NewContinuousVariables(3, N, "CoM")
 CoMd = prog.NewContinuousVariables(3, N, "CoMd")
 CoMdd = prog.NewContinuousVariables(3, N-1, "CoMdd")
-prog.AddBoundingBoxConstraint(0.125, np.inf, CoM[2, :]) # don't go under the ground
 prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, 0]) # Initial CoM position = q0
 prog.AddBoundingBoxConstraint(0, 0, CoMd[:, 0]) # Initial CoM vel = 0
-# prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, -1]) # Final CoM position = q0
-# prog.AddBoundingBoxConstraint(0, 0, CoMd[:, -1]) # Final CoM vel = 0
-# for n in range(N): # Initial guess is a parabola
-#     if n <= N_windup:
-#         prog.SetInitialGuess(CoM[2, n], 0)
-#     prog.SetInitialGuess(CoM[2, n], -(n-sum(h[i] for i in range(N_windup)))*(n-N))
+prog.AddBoundingBoxConstraint([0, 0], [0, 0], CoM[:2, -1]) # Final CoM position = q0
 # CoM dynamics
 for n in range(N-1):
     prog.AddConstraint(eq(CoM[:,n+1], CoM[:,n] + h[n]*CoMd[:,n])) # Position
@@ -177,14 +179,14 @@ def angular_momentum_constraint(vars, context_index):
             p_WF = plant.CalcPointsPositions(
                 context[context_index],
                 foot_frame[i],
-                [0,0,0],
+                foot_in_leg,
                 plant.world_frame(),
             )
             Jq_WF = plant.CalcJacobianTranslationalVelocity(
                 context[context_index],
                 JacobianWrtVariable.kQDot,
                 foot_frame[i],
-                [0,0,0],
+                foot_in_leg,
                 plant.world_frame(),
                 plant.world_frame(),
             )
@@ -198,7 +200,7 @@ def angular_momentum_constraint(vars, context_index):
             p_WF = plant.CalcPointsPositions(
                 context[context_index],
                 foot_frame[i],
-                [0,0,0],
+                foot_in_leg,
                 plant.world_frame(),
             )
             torque += np.cross(p_WF.reshape(3) - CoM_, contact_force_[:, i]) # h_dot = (c-p)xf
@@ -260,7 +262,7 @@ def fixed_position_constraint(vars, context_index, frame):
             context[context_index],
             JacobianWrtVariable.kQDot,
             frame,
-            [0,0,0],
+            foot_in_leg,
             plant.world_frame(),
             plant.world_frame(),   
         )
@@ -268,7 +270,7 @@ def fixed_position_constraint(vars, context_index, frame):
             context[context_index+1],
             JacobianWrtVariable.kQDot,
             frame,
-            [0,0,0],
+            foot_in_leg,
             plant.world_frame(),
             plant.world_frame(),   
         )
@@ -302,12 +304,11 @@ for i in range(4):
                 )
         else:
             # Feet somewhere off ground
-            min_clearance = 0.1
             prog.AddConstraint(
                 PositionConstraint(
                     plant,
                     plant.world_frame(),
-                    [-np.inf, -np.inf, min_clearance],
+                    [-np.inf, -np.inf, 1e-4],
                     [np.inf, np.inf, np.inf],
                     foot_frame[i],
                     [0, 0, 0],
@@ -316,7 +317,7 @@ for i in range(4):
                 q[:, n],
             )
 
-# ###########   SOLVE   ###########
+###########   SOLVE   ###########
 solver = SnoptSolver()
 print("Solving")
 start = time.time()
@@ -325,6 +326,7 @@ print(result.is_success())
 print("Time to solve:", time.time() - start)
 
 # ###########   VISUALIZE   ###########
+print(result.GetSolution(h))
 print("Visualizing")
 context = diagram.CreateDefaultContext()
 plant_context = plant.GetMyContextFromRoot(context)
