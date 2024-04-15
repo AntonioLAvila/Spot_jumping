@@ -47,12 +47,6 @@ diagram_context = diagram.CreateDefaultContext()
 plant_context = plant.GetMyContextFromRoot(diagram_context)
 q0 = plant.GetDefaultPositions()
 q0[6] -= 0.02889683
-# print(plant.CalcPointsPositions(
-#     plant_context,
-#     plant.GetFrameByName("front_left_lower_leg"),
-#     [0,0,-0.3365-0.036],
-#     plant.world_frame(),
-# ))
 plant.SetPositions(plant_context, q0)
 diagram.ForcedPublish(diagram_context)
 
@@ -81,6 +75,7 @@ N_flight = 61
 T_stance = 3
 h_stance = T_stance/(N_stance-1)
 max_jump_time = 3
+min_jump_time = 0.5
 N = N_stance + N_flight
 in_stance = np.zeros((4, N), dtype=bool)
 in_stance[:, :N_stance] = True
@@ -92,7 +87,7 @@ prog = MathematicalProgram()
 # Time steps
 h = prog.NewContinuousVariables(N-1, "h")
 prog.AddBoundingBoxConstraint(h_stance, h_stance, h[:N_stance])
-prog.AddBoundingBoxConstraint(0.015, max_jump_time/N_flight, h[N_stance:])
+prog.AddBoundingBoxConstraint(min_jump_time/N_flight, max_jump_time/N_flight, h[N_stance:])
 
 
 context = [plant.CreateDefaultContext() for _ in range(N)]
@@ -155,6 +150,12 @@ CoMdd = prog.NewContinuousVariables(3, N-1, "CoMdd")
 prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, 0]) # Initial CoM position = q0
 prog.AddBoundingBoxConstraint(0, 0, CoMd[:, 0]) # Initial CoM vel = 0
 prog.AddBoundingBoxConstraint([0, 0], [0, 0], CoM[:2, -1]) # Final CoM position = q0
+for n in range(N): # initial guess is parabola
+    if n < N_stance:
+        prog.SetInitialGuess(CoM[:, n], q0[4:7])
+    else:
+        prog.SetInitialGuess(CoM[:, n], [0,0,-(n-N_flight)*(n-N-1)])
+
 # CoM dynamics
 for n in range(N-1):
     prog.AddConstraint(eq(CoM[:,n+1], CoM[:,n] + h[n]*CoMd[:,n])) # Position
@@ -289,7 +290,7 @@ for i in range(4):
                     [-np.inf, -np.inf, 0],
                     [np.inf, np.inf, 0],
                     foot_frame[i],
-                    [0, 0, 0],
+                    foot_in_leg,
                     context[n],
                 ),
                 q[:, n],
@@ -311,7 +312,7 @@ for i in range(4):
                     [-np.inf, -np.inf, 1e-4],
                     [np.inf, np.inf, np.inf],
                     foot_frame[i],
-                    [0, 0, 0],
+                    foot_in_leg,
                     context[n],
                 ),
                 q[:, n],
@@ -325,7 +326,7 @@ result = solver.Solve(prog)
 print(result.is_success())
 print("Time to solve:", time.time() - start)
 
-# ###########   VISUALIZE   ###########
+###########   VISUALIZE   ###########
 print(result.GetSolution(h))
 print("Visualizing")
 context = diagram.CreateDefaultContext()
