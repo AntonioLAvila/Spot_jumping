@@ -79,6 +79,7 @@ min_jump_time = 0.5
 N = N_stance + N_flight
 in_stance = np.zeros((4, N), dtype=bool)
 in_stance[:, :N_stance] = True
+in_stance[-1] = True
 
 
 ###########   JUMP OPTIMIZATION   ###########
