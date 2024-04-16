@@ -79,23 +79,28 @@ min_jump_time = 0.5
 N = N_stance + N_flight
 in_stance = np.zeros((4, N), dtype=bool)
 in_stance[:, :N_stance] = True
-in_stance[-1] = True
 
 
 ###########   JUMP OPTIMIZATION   ###########
 prog = MathematicalProgram()
 
-# Time steps
+##### Time steps #####
 h = prog.NewContinuousVariables(N-1, "h")
 prog.AddBoundingBoxConstraint(h_stance, h_stance, h[:N_stance])
 prog.AddBoundingBoxConstraint(min_jump_time/N_flight, max_jump_time/N_flight, h[N_stance:])
 
-
+##### Variables #####
 context = [plant.CreateDefaultContext() for _ in range(N)]
 q = prog.NewContinuousVariables(nq, N, "q")
 v = prog.NewContinuousVariables(nv, N, "v")
+CoM = prog.NewContinuousVariables(3, N, "CoM")
+CoMd = prog.NewContinuousVariables(3, N, "CoMd")
+CoMdd = prog.NewContinuousVariables(3, N-1, "CoMdd")
+H = prog.NewContinuousVariables(3, N, "H")
+Hd = prog.NewContinuousVariables(3, N-1, "Hd")
+contact_force = [prog.NewContinuousVariables(3, N-1, f"foot{i}_contact_force") for i in range(4)]
 
-# Constraints invariant of time
+##### Constraints for all time #####
 for n in range(N):
     # Unit quaternions
     AddUnitQuaternionConstraintOnPlant(plant, q[:, n], prog)
@@ -106,66 +111,25 @@ for n in range(N):
     # Initial guess is the default position
     prog.SetInitialGuess(q[:, n], q0)
 
-# Velocity dynamics constraints
-ad_velocity_dynamics_context = [ad_plant.CreateDefaultContext() for _ in range(N)]
-def velocity_dynamics_constraint(vars, context_index):
-    h_, q_, v_, qn_ = np.split(vars, [1, 1+nq, 1+nq+nv])
-    if isinstance(vars[0], AutoDiffXd):
-        if not autoDiffArrayEqual(q_, ad_plant.GetPositions(ad_velocity_dynamics_context[context_index])):
-            ad_plant.SetPositions(ad_velocity_dynamics_context[context_index], q_)
-        v_qd = ad_plant.MapQDotToVelocity(ad_velocity_dynamics_context[context_index], (qn_-q_)/h_)
-    else:
-        if not np.array_equal(q_, plant.GetPositions(context[context_index])):
-            plant.SetPositions(context[context_index], q_)
-        v_qd = plant.MapQDotToVelocity(context[context_index], (qn_-q_)/h_)
-    return v_ - v_qd # Should be 0
-for n in range(N-1):
-    prog.AddConstraint(
-        partial(velocity_dynamics_constraint, context_index=n),
-        lb=[0]*nv,
-        ub=[0]*nv,
-        vars=np.concatenate(([h[n]], q[:,n], v[:,n], q[:,n+1])),
-    )
-
-# Contact force constraints
-contact_force = [prog.NewContinuousVariables(3, N-1, f"foot{i}_contact_force") for i in range(4)]
-for foot in range(4):
-    for n in range(N-1):
-        # Friction pyramid TODO change to friction cone
-        prog.AddLinearConstraint(contact_force[foot][0, n] <= mu*contact_force[foot][2, n])
-        prog.AddLinearConstraint(contact_force[foot][0, n] >= -mu*contact_force[foot][2, n])
-        prog.AddLinearConstraint(contact_force[foot][1, n] <= mu*contact_force[foot][2, n])
-        prog.AddLinearConstraint(contact_force[foot][1, n] >= -mu*contact_force[foot][2, n])
-        # Normal force >=0 if in stance 0 otherwise
-        if in_stance[foot, n]:
-            prog.AddBoundingBoxConstraint(0, np.inf, contact_force[foot][2, n])
-            # prog.AddBoundingBoxConstraint(0, 4*9.81*total_mass, contact_force[foot][2, n])
-        else:
-            prog.AddBoundingBoxConstraint(0, 0, contact_force[foot][2, n])
-
-
-# Center of mass translational constraints
-CoM = prog.NewContinuousVariables(3, N, "CoM")
-CoMd = prog.NewContinuousVariables(3, N, "CoMd")
-CoMdd = prog.NewContinuousVariables(3, N-1, "CoMdd")
-prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, 0]) # Initial CoM position = q0
-prog.AddBoundingBoxConstraint(0, 0, CoMd[:, 0]) # Initial CoM vel = 0
-prog.AddBoundingBoxConstraint([0, 0], [0, 0], CoM[:2, -1]) # Final CoM position = q0
+##### Initial/Final state constraints and guesses #####
+prog.AddBoundingBoxConstraint(q0, q0, q[:,0]) # Joints
+prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, 0]) # CoM position = q0
+prog.AddBoundingBoxConstraint(0, 0, CoMd[:, 0]) # CoM vel = 0
+prog.AddBoundingBoxConstraint([0, 0], [0, 0], CoM[:2, -1]) # CoM position at x,y = 0,0
 for n in range(N): # initial guess is parabola
     if n < N_stance:
         prog.SetInitialGuess(CoM[:, n], q0[4:7])
     else:
         prog.SetInitialGuess(CoM[:, n], [0,0,-(n-N_flight)*(n-N-1)])
 
-# CoM dynamics
+##### Center of mass constraints #####
+# Translational
 for n in range(N-1):
     prog.AddConstraint(eq(CoM[:,n+1], CoM[:,n] + h[n]*CoMd[:,n])) # Position
     prog.AddConstraint(eq(CoMd[:,n+1], CoMd[:,n] + h[n]*CoMdd[:,n])) # Velocity
-    prog.AddConstraint(eq(total_mass*CoMdd[:,n], sum(contact_force[i][:,n] for i in range(4)) + total_mass*gravity)) # ma = Σf + fg
+    prog.AddConstraint(eq(total_mass*CoMdd[:,n], sum(contact_force[i][:,n] for i in range(4)) + total_mass*gravity)) # ma = Σf
 
-# Center of mass angular constraints
-H = prog.NewContinuousVariables(3, N, "H")
-Hd = prog.NewContinuousVariables(3, N-1, "Hdot")
+# Angular Momentum
 prog.SetInitialGuess(H, np.zeros((3, N))) # Start unturned
 prog.SetInitialGuess(Hd, np.zeros((3, N-1))) # Start not spinning
 def angular_momentum_constraint(vars, context_index):
@@ -231,7 +195,7 @@ def CoM_constraint(vars, context_index):
             plant.SetPositionsAndVelocities(CoM_constraint_context[context_index], qv)
         CoM_q = plant.CalcCenterOfMassPositionInWorld(context[context_index], [spot])
         H_qv = plant.CalcSpatialMomentumInWorldAboutPoint(CoM_constraint_context[context_index], [spot], CoM).rotational()
-    return np.concatenate((CoM_q - CoM, H_qv - H)) # Should be [0,0,0,0,0,0]
+    return np.concatenate((CoM_q - CoM, H_qv - H)) # Should be 0
 for n in range(N):
     prog.AddConstraint(
         partial(CoM_constraint, context_index=n),
@@ -240,7 +204,28 @@ for n in range(N):
         vars=np.concatenate((q[:,n], v[:,n], CoM[:,n], H[:,n])),
     )
 
-# Kinematic constraints
+##### Joint velocity dynamics constraints #####
+ad_velocity_dynamics_context = [ad_plant.CreateDefaultContext() for _ in range(N)]
+def velocity_dynamics_constraint(vars, context_index):
+    h_, q_, v_, qn_ = np.split(vars, [1, 1+nq, 1+nq+nv])
+    if isinstance(vars[0], AutoDiffXd):
+        if not autoDiffArrayEqual(q_, ad_plant.GetPositions(ad_velocity_dynamics_context[context_index])):
+            ad_plant.SetPositions(ad_velocity_dynamics_context[context_index], q_)
+        v_qd = ad_plant.MapQDotToVelocity(ad_velocity_dynamics_context[context_index], (qn_-q_)/h_)
+    else:
+        if not np.array_equal(q_, plant.GetPositions(context[context_index])):
+            plant.SetPositions(context[context_index], q_)
+        v_qd = plant.MapQDotToVelocity(context[context_index], (qn_-q_)/h_)
+    return v_ - v_qd # Should be 0
+for n in range(N-1):
+    prog.AddConstraint(
+        partial(velocity_dynamics_constraint, context_index=n),
+        lb=[0]*nv,
+        ub=[0]*nv,
+        vars=np.concatenate(([h[n]], q[:,n], v[:,n], q[:,n+1])),
+    )
+
+##### Kinematic constraints #####
 def fixed_position_constraint(vars, context_index, frame):
     q, qn = np.split(vars, [nq])
     if not np.array_equal(q, plant.GetPositions(context[context_index])):
@@ -319,6 +304,20 @@ for i in range(4):
                 q[:, n],
             )
 
+##### Contact force constraints #####
+for foot in range(4):
+    for n in range(N-1):
+        # Friction pyramid
+        prog.AddLinearConstraint(contact_force[foot][0, n] <= mu*contact_force[foot][2, n])
+        prog.AddLinearConstraint(contact_force[foot][0, n] >= -mu*contact_force[foot][2, n])
+        prog.AddLinearConstraint(contact_force[foot][1, n] <= mu*contact_force[foot][2, n])
+        prog.AddLinearConstraint(contact_force[foot][1, n] >= -mu*contact_force[foot][2, n])
+        # Normal force >=0 if in stance 0 otherwise
+        if in_stance[foot, n]:
+            prog.AddBoundingBoxConstraint(0, np.inf, contact_force[foot][2, n])
+        else:
+            prog.AddBoundingBoxConstraint(0, 0, contact_force[foot][2, n])
+
 ###########   SOLVE   ###########
 solver = SnoptSolver()
 print("Solving")
@@ -328,7 +327,8 @@ print(result.is_success())
 print("Time to solve:", time.time() - start)
 
 ###########   VISUALIZE   ###########
-print(result.GetSolution(h))
+# print(result.GetSolution(CoM))
+# print(result.GetSolution(q))
 print("Visualizing")
 context = diagram.CreateDefaultContext()
 plant_context = plant.GetMyContextFromRoot(context)
