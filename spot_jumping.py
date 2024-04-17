@@ -1,6 +1,7 @@
 import numpy as np
 import time
 from pid_standing import run_pid_control
+import matplotlib.pyplot as plt
 from functools import partial
 from pydrake.all import (
     DiscreteContactApproximation,
@@ -79,6 +80,7 @@ min_jump_time = 0.5
 N = N_stance + N_flight
 in_stance = np.zeros((4, N), dtype=bool)
 in_stance[:, :N_stance] = True
+# in_stance[:, -2:] = True
 
 
 ###########   JUMP OPTIMIZATION   ###########
@@ -157,7 +159,7 @@ def angular_momentum_constraint(vars, context_index):
                 plant.world_frame(),
             )
             ad_p_WF = InitializeAutoDiff(p_WF, Jq_WF@dq)
-            torque = torque + np.cross(ad_p_WF.reshape(3) - CoM_, contact_force_[:, i]) # h_dot = (c-p)xf
+            torque = torque + np.cross(ad_p_WF.reshape(3) - CoM_, contact_force_[:, i]) # 𝜏 = (c-p) x f
     else:
         if not np.array_equal(q_, plant.GetPositions(context[context_index])):
             plant.SetPositions(context[context_index], q_)
@@ -169,7 +171,7 @@ def angular_momentum_constraint(vars, context_index):
                 foot_in_leg,
                 plant.world_frame(),
             )
-            torque += np.cross(p_WF.reshape(3) - CoM_, contact_force_[:, i]) # h_dot = (c-p)xf
+            torque += np.cross(p_WF.reshape(3) - CoM_, contact_force_[:, i]) # 𝜏 = (c-p) x f
     return Hd_ - torque # Should be 0
 for n in range(N-1):
     prog.AddConstraint(eq(H[:,n+1], H[:,n] + h[n]*Hd[:,n]))
@@ -178,7 +180,7 @@ for n in range(N-1):
         partial(angular_momentum_constraint, context_index=n),
         lb=[0]*3,
         ub=[0]*3,
-        vars=np.concatenate((q[:, n], CoM[:, n], Hd[:, n], Fn)), # h_dot = (c-p)xf
+        vars=np.concatenate((q[:, n], CoM[:, n], Hd[:, n], Fn)), # h_dot = (c-p) x f = 𝜏
     )
 
 # Make sure plant obeys CoM constraints
@@ -327,12 +329,13 @@ print(result.is_success())
 print("Time to solve:", time.time() - start)
 
 ###########   VISUALIZE   ###########
-# print(result.GetSolution(CoM))
-# print(result.GetSolution(q))
 print("Visualizing")
 context = diagram.CreateDefaultContext()
 plant_context = plant.GetMyContextFromRoot(context)
 t_sol = np.cumsum(np.concatenate(([0], result.GetSolution(h))))
+# plt.plot(t_sol, result.GetSolution(CoM[2]))
+# plt.plot(t_sol, result.GetSolution(q[6]))
+# plt.show()
 q_sol = PiecewisePolynomial.FirstOrderHold(t_sol, result.GetSolution(q))
 visualizer.StartRecording()
 t0 = t_sol[0]
