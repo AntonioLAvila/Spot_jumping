@@ -186,18 +186,18 @@ for n in range(N-1):
 # Make sure plant obeys CoM constraints
 CoM_constraint_context = [ad_plant.CreateDefaultContext() for _ in range(N)]
 def CoM_constraint(vars, context_index):
-    qv, CoM, H = np.split(vars, [nq+nv, nq+nv+3])
+    qv, CoM_, H_ = np.split(vars, [nq+nv, nq+nv+3])
     if isinstance(vars[0], AutoDiffXd):
         if not autoDiffArrayEqual(qv, ad_plant.GetPositionsAndVelocities(CoM_constraint_context[context_index])):
             ad_plant.SetPositionsAndVelocities(CoM_constraint_context[context_index], qv)
         CoM_q = ad_plant.CalcCenterOfMassPositionInWorld(CoM_constraint_context[context_index], [spot])
-        H_qv = ad_plant.CalcSpatialMomentumInWorldAboutPoint(CoM_constraint_context[context_index], [spot], CoM).rotational()
+        H_qv = ad_plant.CalcSpatialMomentumInWorldAboutPoint(CoM_constraint_context[context_index], [spot], CoM_).rotational()
     else:
         if not np.array_equal(qv, plant.GetPositionsAndVelocities(CoM_constraint_context[context_index])):
             plant.SetPositionsAndVelocities(CoM_constraint_context[context_index], qv)
         CoM_q = plant.CalcCenterOfMassPositionInWorld(context[context_index], [spot])
-        H_qv = plant.CalcSpatialMomentumInWorldAboutPoint(CoM_constraint_context[context_index], [spot], CoM).rotational()
-    return np.concatenate((CoM_q - CoM, H_qv - H)) # Should be 0
+        H_qv = plant.CalcSpatialMomentumInWorldAboutPoint(CoM_constraint_context[context_index], [spot], CoM_).rotational()
+    return np.concatenate((CoM_q - CoM, H_qv - H_)) # Should be 0
 for n in range(N):
     prog.AddConstraint(
         partial(CoM_constraint, context_index=n),
@@ -229,9 +229,9 @@ for n in range(N-1):
 
 ##### Kinematic constraints #####
 def fixed_position_constraint(vars, context_index, frame):
-    q, qn = np.split(vars, [nq])
+    q_, qn = np.split(vars, [nq])
     if not np.array_equal(q, plant.GetPositions(context[context_index])):
-        plant.SetPositions(context[context_index], q)
+        plant.SetPositions(context[context_index], q_)
     if not np.array_equal(qn, plant.GetPositions(context[context_index+1])):
         plant.SetPositions(context[context_index+1], qn)
     p_WF = plant.CalcPointsPositions(
@@ -263,7 +263,7 @@ def fixed_position_constraint(vars, context_index, frame):
             plant.world_frame(),
             plant.world_frame(),   
         )
-        return InitializeAutoDiff(p_WF_n - p_WF, J_WF_n@ExtractGradient(qn) - J_WF@ExtractGradient(q))
+        return InitializeAutoDiff(p_WF_n - p_WF, J_WF_n@ExtractGradient(qn) - J_WF@ExtractGradient(q_))
     else:
         return p_WF_n - p_WF # Should be 0
 
