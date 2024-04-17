@@ -74,10 +74,10 @@ foot_in_leg = [0,0,-0.3365-0.036]
 
 N_stance = 60
 N_flight = 61
-T_stance = 3
+T_stance = 1.5
 h_stance = T_stance/(N_stance-1)
-max_jump_time = 3
-min_jump_time = 0.5
+max_jump_time = 2
+min_jump_time = 0.25
 N = N_stance + N_flight
 in_stance = np.zeros((4, N), dtype=bool)
 in_stance[:, :N_stance] = True
@@ -108,14 +108,14 @@ prog.SetInitialGuess(H, np.zeros((3, N))) # unturned
 prog.SetInitialGuess(Hd, np.zeros((3, N-1))) # not spinning
 for n in range(N):
     prog.SetInitialGuess(q[:, n], q0) # joint positions nominal position
-for n in range(N):
     if n < N_stance:
-        prog.SetInitialGuess(CoM[:,n], [0,0, q0[6]])
+        prog.SetInitialGuess(CoM[:,n], q0[4:7])
     else:
-        min_h_fl = min_jump_time/N_flight
-        t = min_h_fl*(n-N_flight)
-        prog.SetInitialGuess(CoM[:,n], [0,0,-1/2*9.8*t**2]) # ballistic parabola in z
-
+        avg_jump_time = (min_jump_time+max_jump_time)/2
+        h_fl = avg_jump_time/N_flight
+        t = h_fl*(n-N_stance)
+        parabola = -0.5*avg_jump_time*gravity[2]*t + 0.5*gravity[2]*(t**2)
+        prog.SetInitialGuess(CoM[:,n], [0,0, q0[6] + parabola]) # ballistic parabola in z
 
 ##### Constraints for all time #####
 for n in range(N):
@@ -126,12 +126,25 @@ for n in range(N):
     # Joint velocity limits
     prog.AddBoundingBoxConstraint(plant.GetVelocityLowerLimits(), plant.GetVelocityUpperLimits(), v[:, n])
 
-##### Initial/Final state constraints #####
+##### Initial state constraints #####
 prog.AddBoundingBoxConstraint(q0, q0, q[:,0]) # Joints
 prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, 0]) # CoM position = q0
 prog.AddBoundingBoxConstraint(0, 0, CoMd[:, 0]) # CoM vel = 0
-prog.AddBoundingBoxConstraint([0, 0], [0, 0], CoM[:2, -1]) # CoM position at x,y = 0,0
+##### Final state constraints #####
+prog.AddBoundingBoxConstraint([0,0], [0,0], CoM[:2,-1])
+# prog.AddBoundingBoxConstraint([0,0,0], [0,0,0], H[:,-1]) # angular momentum
 
+##### Costs #####
+# prog.AddQuadraticErrorCost(np.ones(3), q0[4:7], CoM[:,-1])
+# for n in range(N):
+#     if n < N_stance:
+#         prog.AddQuadraticErrorCost(np.ones(3), q0[4:7], CoM[:,n])
+#     else:
+#         avg_jump_time = (min_jump_time+max_jump_time)/2
+#         h_fl = avg_jump_time/N_flight
+#         t = h_fl*(n-N_stance)
+#         parabola = -0.5*avg_jump_time*gravity[2]*t + 0.5*gravity[2]*(t**2)
+#         prog.AddQuadraticErrorCost(np.ones(3), [0,0, q0[6] + parabola], CoM[:,n])
 
 ##### Center of mass constraints #####
 # Translational
@@ -340,9 +353,6 @@ print("Visualizing")
 context = diagram.CreateDefaultContext()
 plant_context = plant.GetMyContextFromRoot(context)
 t_sol = np.cumsum(np.concatenate(([0], result.GetSolution(h))))
-# plt.plot(t_sol, result.GetSolution(CoM[2]))
-# plt.plot(t_sol, result.GetSolution(q[6]))
-# plt.show()
 q_sol = PiecewisePolynomial.FirstOrderHold(t_sol, result.GetSolution(q))
 visualizer.StartRecording()
 t0 = t_sol[0]
@@ -353,6 +363,9 @@ for t in t_sol:
     diagram.ForcedPublish(context)
 visualizer.StopRecording()
 visualizer.PublishRecording()
-# while True: pass # Keep the viz up
+plt.plot(t_sol, result.GetSolution(CoM[2]))
+plt.plot(t_sol, result.GetSolution(q[6]))
+plt.plot(t_sol[:-1], result.GetSolution(contact_force[1][2]))
+plt.show()
 
 
