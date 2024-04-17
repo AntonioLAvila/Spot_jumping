@@ -108,12 +108,13 @@ prog.SetInitialGuess(H, np.zeros((3, N))) # unturned
 prog.SetInitialGuess(Hd, np.zeros((3, N-1))) # not spinning
 for n in range(N):
     prog.SetInitialGuess(q[:, n], q0) # joint positions nominal position
-
 for n in range(N):
-    if in_stance(N):
-        prog.SetInitialGuess(CoM, [0,0, q0[6]])
+    if n < N_stance:
+        prog.SetInitialGuess(CoM[:,n], [0,0, q0[6]])
     else:
-        pass
+        min_h_fl = min_jump_time/N_flight
+        t = min_h_fl*(n-N_flight)
+        prog.SetInitialGuess(CoM[:,n], [0,0,-1/2*9.8*t**2]) # ballistic parabola in z
 
 
 ##### Constraints for all time #####
