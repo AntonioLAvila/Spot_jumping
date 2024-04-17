@@ -2,6 +2,7 @@ import numpy as np
 import time
 from pid_standing import run_pid_control
 import matplotlib.pyplot as plt
+from IPython.display import display, Markdown
 from functools import partial
 from pydrake.all import (
     DiscreteContactApproximation,
@@ -102,6 +103,19 @@ H = prog.NewContinuousVariables(3, N, "H")
 Hd = prog.NewContinuousVariables(3, N-1, "Hd")
 contact_force = [prog.NewContinuousVariables(3, N-1, f"foot{i}_contact_force") for i in range(4)]
 
+##### Guesses #####
+prog.SetInitialGuess(H, np.zeros((3, N))) # unturned
+prog.SetInitialGuess(Hd, np.zeros((3, N-1))) # not spinning
+for n in range(N):
+    prog.SetInitialGuess(q[:, n], q0) # joint positions nominal position
+
+for n in range(N):
+    if in_stance(N):
+        prog.SetInitialGuess(CoM, [0,0, q0[6]])
+    else:
+        pass
+
+
 ##### Constraints for all time #####
 for n in range(N):
     # Unit quaternions
@@ -110,19 +124,13 @@ for n in range(N):
     prog.AddBoundingBoxConstraint(plant.GetPositionLowerLimits(), plant.GetPositionUpperLimits(), q[:, n])
     # Joint velocity limits
     prog.AddBoundingBoxConstraint(plant.GetVelocityLowerLimits(), plant.GetVelocityUpperLimits(), v[:, n])
-    # Initial guess is the default position
-    prog.SetInitialGuess(q[:, n], q0)
 
-##### Initial/Final state constraints and guesses #####
+##### Initial/Final state constraints #####
 prog.AddBoundingBoxConstraint(q0, q0, q[:,0]) # Joints
 prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, 0]) # CoM position = q0
 prog.AddBoundingBoxConstraint(0, 0, CoMd[:, 0]) # CoM vel = 0
 prog.AddBoundingBoxConstraint([0, 0], [0, 0], CoM[:2, -1]) # CoM position at x,y = 0,0
-for n in range(N): # initial guess is parabola
-    if n < N_stance:
-        prog.SetInitialGuess(CoM[:, n], q0[4:7])
-    else:
-        prog.SetInitialGuess(CoM[:, n], [0,0,-(n-N_flight)*(n-N-1)])
+
 
 ##### Center of mass constraints #####
 # Translational
@@ -132,8 +140,6 @@ for n in range(N-1):
     prog.AddConstraint(eq(total_mass*CoMdd[:,n], sum(contact_force[i][:,n] for i in range(4)) + total_mass*gravity)) # ma = Σf
 
 # Angular Momentum
-prog.SetInitialGuess(H, np.zeros((3, N))) # Start unturned
-prog.SetInitialGuess(Hd, np.zeros((3, N-1))) # Start not spinning
 def angular_momentum_constraint(vars, context_index):
     q_, CoM_, Hd_, contact_force_ = np.split(vars, [nq, 3+nq, 6+nq])
     contact_force_ = contact_force_.reshape(3, 4, order="F")
@@ -197,7 +203,7 @@ def CoM_constraint(vars, context_index):
             plant.SetPositionsAndVelocities(CoM_constraint_context[context_index], qv)
         CoM_q = plant.CalcCenterOfMassPositionInWorld(context[context_index], [spot])
         H_qv = plant.CalcSpatialMomentumInWorldAboutPoint(CoM_constraint_context[context_index], [spot], CoM_).rotational()
-    return np.concatenate((CoM_q - CoM, H_qv - H_)) # Should be 0
+    return np.concatenate((CoM_q - CoM_, H_qv - H_)) # Should be 0
 for n in range(N):
     prog.AddConstraint(
         partial(CoM_constraint, context_index=n),
@@ -230,7 +236,7 @@ for n in range(N-1):
 ##### Kinematic constraints #####
 def fixed_position_constraint(vars, context_index, frame):
     q_, qn = np.split(vars, [nq])
-    if not np.array_equal(q, plant.GetPositions(context[context_index])):
+    if not np.array_equal(q_, plant.GetPositions(context[context_index])):
         plant.SetPositions(context[context_index], q_)
     if not np.array_equal(qn, plant.GetPositions(context[context_index+1])):
         plant.SetPositions(context[context_index+1], qn)
