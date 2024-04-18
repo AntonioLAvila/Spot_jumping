@@ -125,6 +125,19 @@ for n in range(N):
     prog.AddBoundingBoxConstraint(plant.GetPositionLowerLimits(), plant.GetPositionUpperLimits(), q[:, n])
     # Joint velocity limits
     prog.AddBoundingBoxConstraint(plant.GetVelocityLowerLimits(), plant.GetVelocityUpperLimits(), v[:, n])
+    # Body orientation
+    prog.AddConstraint(
+        OrientationConstraint(
+            plant,
+            body_frame,
+            RotationMatrix(),
+            plant.world_frame(),
+            RotationMatrix(),
+            np.pi/6,
+            context[n],
+        ),
+        q[:, n],
+    )
 
 ##### Initial state constraints #####
 prog.AddBoundingBoxConstraint(q0, q0, q[:,0]) # Joints
@@ -365,7 +378,7 @@ visualizer.StopRecording()
 visualizer.PublishRecording()
 plt.plot(t_sol, result.GetSolution(CoM[2]))
 plt.plot(t_sol, result.GetSolution(q[6]))
-plt.plot(t_sol[:-1], result.GetSolution(contact_force[1][2]))
+# plt.plot(t_sol[:-1], result.GetSolution(contact_force[1][2]))
 plt.show()
 
 
