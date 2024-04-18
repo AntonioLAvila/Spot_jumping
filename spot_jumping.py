@@ -126,18 +126,18 @@ for n in range(N):
     # Joint velocity limits
     prog.AddBoundingBoxConstraint(plant.GetVelocityLowerLimits(), plant.GetVelocityUpperLimits(), v[:, n])
     # Body orientation
-    prog.AddConstraint(
-        OrientationConstraint(
-            plant,
-            body_frame,
-            RotationMatrix(),
-            plant.world_frame(),
-            RotationMatrix(),
-            np.pi/6,
-            context[n],
-        ),
-        q[:, n],
-    )
+    # prog.AddConstraint(
+    #     OrientationConstraint(
+    #         plant,
+    #         body_frame,
+    #         RotationMatrix(),
+    #         plant.world_frame(),
+    #         RotationMatrix(),
+    #         np.pi/6,
+    #         context[n],
+    #     ),
+    #     q[:, n],
+    # )
 
 ##### Initial state constraints #####
 prog.AddBoundingBoxConstraint(q0, q0, q[:,0]) # Joints
