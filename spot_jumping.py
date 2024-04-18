@@ -354,10 +354,19 @@ for foot in range(4):
             prog.AddBoundingBoxConstraint(0, 0, contact_force[foot][2, n])
 
 ###########   SOLVE   ###########
-solver = SnoptSolver()
+# snopt = SnoptSolver()
+
+snopt = SnoptSolver().solver_id()
+prog.SetSolverOption(snopt, "Iterations Limits", 1e5)
+prog.SetSolverOption(snopt, "Major Iterations Limit", 200)
+prog.SetSolverOption(snopt, "Major Feasibility Tolerance", 5e-6)
+prog.SetSolverOption(snopt, "Major Optimality Tolerance", 1e-4)
+prog.SetSolverOption(snopt, "Superbasics limit", 2000)
+prog.SetSolverOption(snopt, "Linesearch tolerance", 0.9)
+
 print("Solving")
 start = time.time()
-result = solver.Solve(prog)
+result = snopt.Solve(prog)
 print(result.is_success())
 print("Time to solve:", time.time() - start)
 
@@ -376,8 +385,9 @@ for t in t_sol:
     diagram.ForcedPublish(context)
 visualizer.StopRecording()
 visualizer.PublishRecording()
-plt.plot(t_sol, result.GetSolution(CoM[2]))
-plt.plot(t_sol, result.GetSolution(q[6]))
+plt.plot(t_sol, result.GetSolution(CoM[2]), label="CoM")
+plt.plot(t_sol, result.GetSolution(q[6]), label="q")
+plt.legend(loc="upper left")
 # plt.plot(t_sol[:-1], result.GetSolution(contact_force[1][2]))
 plt.show()
 
