@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from IPython.display import display, Markdown
 from functools import partial
 from pydrake.all import (
+    Solve,
     DiscreteContactApproximation,
     RobotDiagramBuilder,
     StartMeshcat,
@@ -108,14 +109,17 @@ prog.SetInitialGuess(H, np.zeros((3, N))) # unturned
 prog.SetInitialGuess(Hd, np.zeros((3, N-1))) # not spinning
 for n in range(N):
     prog.SetInitialGuess(q[:, n], q0) # joint positions nominal position
+    final = q0[6] - ((q0[6] - 0.125)/T_stance)*(h_stance*(N_stance-1))
     if n < N_stance:
-        prog.SetInitialGuess(CoM[:,n], q0[4:7])
+        slope = (q0[6] - 0.125)/T_stance
+        t = h_stance*n
+        prog.SetInitialGuess(CoM[:,n], [0,0, q0[6] - slope*t])
     else:
         avg_jump_time = (min_jump_time+max_jump_time)/2
         h_fl = avg_jump_time/N_flight
         t = h_fl*(n-N_stance)
         parabola = -0.5*avg_jump_time*gravity[2]*t + 0.5*gravity[2]*(t**2)
-        prog.SetInitialGuess(CoM[:,n], [0,0, q0[6] + parabola]) # ballistic parabola in z
+        prog.SetInitialGuess(CoM[:,n], [0,0, final + parabola]) # ballistic parabola in z
 
 ##### Constraints for all time #####
 for n in range(N):
@@ -192,7 +196,7 @@ def angular_momentum_constraint(vars, context_index):
                 plant.world_frame(),
             )
             ad_p_WF = InitializeAutoDiff(p_WF, Jq_WF@dq)
-            torque = torque + np.cross(ad_p_WF.reshape(3) - CoM_, contact_force_[:, i]) # 𝜏 = (c-p) x f
+            torque = torque + np.cross(ad_p_WF.reshape(3) - CoM_, contact_force_[:, i]) # 𝜏 = Σ(c-p) x f
     else:
         if not np.array_equal(q_, plant.GetPositions(context[context_index])):
             plant.SetPositions(context[context_index], q_)
@@ -204,7 +208,7 @@ def angular_momentum_constraint(vars, context_index):
                 foot_in_leg,
                 plant.world_frame(),
             )
-            torque += np.cross(p_WF.reshape(3) - CoM_, contact_force_[:, i]) # 𝜏 = (c-p) x f
+            torque += np.cross(p_WF.reshape(3) - CoM_, contact_force_[:, i]) # 𝜏 = Σ(c-p) x f
     return Hd_ - torque # Should be 0
 for n in range(N-1):
     prog.AddConstraint(eq(H[:,n+1], H[:,n] + h[n]*Hd[:,n]))
@@ -213,7 +217,7 @@ for n in range(N-1):
         partial(angular_momentum_constraint, context_index=n),
         lb=[0]*3,
         ub=[0]*3,
-        vars=np.concatenate((q[:, n], CoM[:, n], Hd[:, n], Fn)), # h_dot = (c-p) x f = 𝜏
+        vars=np.concatenate((q[:, n], CoM[:, n], Hd[:, n], Fn)), # h_dot = Σ(c-p) x f = 𝜏
     )
 
 # Make sure plant obeys CoM constraints
@@ -226,10 +230,10 @@ def CoM_constraint(vars, context_index):
         CoM_q = ad_plant.CalcCenterOfMassPositionInWorld(CoM_constraint_context[context_index], [spot])
         H_qv = ad_plant.CalcSpatialMomentumInWorldAboutPoint(CoM_constraint_context[context_index], [spot], CoM_).rotational()
     else:
-        if not np.array_equal(qv, plant.GetPositionsAndVelocities(CoM_constraint_context[context_index])):
-            plant.SetPositionsAndVelocities(CoM_constraint_context[context_index], qv)
+        if not np.array_equal(qv, plant.GetPositionsAndVelocities(context[context_index])):
+            plant.SetPositionsAndVelocities(context[context_index], qv)
         CoM_q = plant.CalcCenterOfMassPositionInWorld(context[context_index], [spot])
-        H_qv = plant.CalcSpatialMomentumInWorldAboutPoint(CoM_constraint_context[context_index], [spot], CoM_).rotational()
+        H_qv = plant.CalcSpatialMomentumInWorldAboutPoint(context[context_index], [spot], CoM_).rotational()
     return np.concatenate((CoM_q - CoM_, H_qv - H_)) # Should be 0
 for n in range(N):
     prog.AddConstraint(
@@ -344,9 +348,9 @@ for foot in range(4):
     for n in range(N-1):
         # Friction pyramid
         prog.AddLinearConstraint(contact_force[foot][0, n] <= mu*contact_force[foot][2, n])
-        prog.AddLinearConstraint(contact_force[foot][0, n] >= -mu*contact_force[foot][2, n])
+        prog.AddLinearConstraint(-contact_force[foot][0, n] <= mu*contact_force[foot][2, n])
         prog.AddLinearConstraint(contact_force[foot][1, n] <= mu*contact_force[foot][2, n])
-        prog.AddLinearConstraint(contact_force[foot][1, n] >= -mu*contact_force[foot][2, n])
+        prog.AddLinearConstraint(-contact_force[foot][1, n] <= mu*contact_force[foot][2, n])
         # Normal force >=0 if in stance 0 otherwise
         if in_stance[foot, n]:
             prog.AddBoundingBoxConstraint(0, np.inf, contact_force[foot][2, n])
@@ -366,7 +370,7 @@ prog.SetSolverOption(snopt, "Linesearch tolerance", 0.9)
 
 print("Solving")
 start = time.time()
-result = snopt.Solve(prog)
+result = Solve(prog)
 print(result.is_success())
 print("Time to solve:", time.time() - start)
 
@@ -388,7 +392,6 @@ visualizer.PublishRecording()
 plt.plot(t_sol, result.GetSolution(CoM[2]), label="CoM")
 plt.plot(t_sol, result.GetSolution(q[6]), label="q")
 plt.legend(loc="upper left")
-# plt.plot(t_sol[:-1], result.GetSolution(contact_force[1][2]))
 plt.show()
 
 
