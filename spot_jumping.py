@@ -29,10 +29,9 @@ from underactuated.underactuated import ConfigureParser
 def autoDiffArrayEqual(a, b):
     return np.array_equal(a, b) and np.array_equal(ExtractGradient(a), ExtractGradient(b))
 
-meshcat = StartMeshcat()
-# run_pid_control(meshcat)
 
 ###########   INITIALIZATION   ###########
+meshcat = StartMeshcat()
 robot_builder = RobotDiagramBuilder(time_step=1e-4)
 plant = robot_builder.plant()
 scene_graph = robot_builder.scene_graph()
@@ -129,19 +128,6 @@ for n in range(N):
     prog.AddBoundingBoxConstraint(plant.GetPositionLowerLimits(), plant.GetPositionUpperLimits(), q[:, n])
     # Joint velocity limits
     prog.AddBoundingBoxConstraint(plant.GetVelocityLowerLimits(), plant.GetVelocityUpperLimits(), v[:, n])
-    # Body orientation
-    # prog.AddConstraint(
-    #     OrientationConstraint(
-    #         plant,
-    #         body_frame,
-    #         RotationMatrix(),
-    #         plant.world_frame(),
-    #         RotationMatrix(),
-    #         np.pi/6,
-    #         context[n],
-    #     ),
-    #     q[:, n],
-    # )
 
 ##### Initial state constraints #####
 prog.AddBoundingBoxConstraint(q0, q0, q[:,0]) # Joints
@@ -152,16 +138,21 @@ prog.AddBoundingBoxConstraint([0,0], [0,0], CoM[:2,-1])
 # prog.AddBoundingBoxConstraint([0,0,0], [0,0,0], H[:,-1]) # angular momentum
 
 ##### Costs #####
-# prog.AddQuadraticErrorCost(np.ones(3), q0[4:7], CoM[:,-1])
-# for n in range(N):
-#     if n < N_stance:
-#         prog.AddQuadraticErrorCost(np.ones(3), q0[4:7], CoM[:,n])
-#     else:
-#         avg_jump_time = (min_jump_time+max_jump_time)/2
-#         h_fl = avg_jump_time/N_flight
-#         t = h_fl*(n-N_stance)
-#         parabola = -0.5*avg_jump_time*gravity[2]*t + 0.5*gravity[2]*(t**2)
-#         prog.AddQuadraticErrorCost(np.ones(3), [0,0, q0[6] + parabola], CoM[:,n])
+
+
+##### Contact force constraints #####
+for foot in range(4):
+    for n in range(N-1):
+        # Friction pyramid
+        prog.AddLinearConstraint(contact_force[foot][0, n] <= mu*contact_force[foot][2, n])
+        prog.AddLinearConstraint(-contact_force[foot][0, n] <= mu*contact_force[foot][2, n])
+        prog.AddLinearConstraint(contact_force[foot][1, n] <= mu*contact_force[foot][2, n])
+        prog.AddLinearConstraint(-contact_force[foot][1, n] <= mu*contact_force[foot][2, n])
+        # Normal force >=0 if in stance 0 otherwise
+        if in_stance[foot, n]:
+            prog.AddBoundingBoxConstraint(0, np.inf, contact_force[foot][2, n])
+        else:
+            prog.AddBoundingBoxConstraint(0, 0, contact_force[foot][2, n])
 
 ##### Center of mass constraints #####
 # Translational
@@ -342,20 +333,6 @@ for i in range(4):
                 ),
                 q[:, n],
             )
-
-##### Contact force constraints #####
-for foot in range(4):
-    for n in range(N-1):
-        # Friction pyramid
-        prog.AddLinearConstraint(contact_force[foot][0, n] <= mu*contact_force[foot][2, n])
-        prog.AddLinearConstraint(-contact_force[foot][0, n] <= mu*contact_force[foot][2, n])
-        prog.AddLinearConstraint(contact_force[foot][1, n] <= mu*contact_force[foot][2, n])
-        prog.AddLinearConstraint(-contact_force[foot][1, n] <= mu*contact_force[foot][2, n])
-        # Normal force >=0 if in stance 0 otherwise
-        if in_stance[foot, n]:
-            prog.AddBoundingBoxConstraint(0, np.inf, contact_force[foot][2, n])
-        else:
-            prog.AddBoundingBoxConstraint(0, 0, contact_force[foot][2, n])
 
 ###########   SOLVE   ###########
 # snopt = SnoptSolver()
