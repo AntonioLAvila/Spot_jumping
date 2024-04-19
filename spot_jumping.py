@@ -2,7 +2,6 @@ import numpy as np
 import time
 from pid_standing import run_pid_control
 import matplotlib.pyplot as plt
-from IPython.display import display, Markdown
 from functools import partial
 from pydrake.all import (
     Solve,
@@ -335,19 +334,10 @@ for i in range(4):
             )
 
 ###########   SOLVE   ###########
-# snopt = SnoptSolver()
-
-snopt = SnoptSolver().solver_id()
-prog.SetSolverOption(snopt, "Iterations Limits", 1e5)
-prog.SetSolverOption(snopt, "Major Iterations Limit", 200)
-prog.SetSolverOption(snopt, "Major Feasibility Tolerance", 5e-6)
-prog.SetSolverOption(snopt, "Major Optimality Tolerance", 1e-4)
-prog.SetSolverOption(snopt, "Superbasics limit", 2000)
-prog.SetSolverOption(snopt, "Linesearch tolerance", 0.9)
-
+snopt = SnoptSolver()
 print("Solving")
 start = time.time()
-result = Solve(prog)
+result = snopt.Solve(prog)
 print(result.is_success())
 print("Time to solve:", time.time() - start)
 
