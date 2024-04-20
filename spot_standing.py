@@ -338,7 +338,7 @@ for foot in range(4):
             # Feet stationary
             if n+1 <= N_stance:
                 prog.AddConstraint(
-                    partial(fixed_position_constraint, context_index=n, frame=foot_frame[i]),
+                    partial(fixed_position_constraint, context_index=n, frame=foot_frame[foot]),
                     lb=[0]*3,
                     ub=[0]*3,
                     vars=np.concatenate((q[:, n], q[:, n+1])),
