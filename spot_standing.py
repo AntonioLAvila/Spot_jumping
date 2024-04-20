@@ -86,7 +86,6 @@ min_jump_time = 0.25
 N = N_stance + N_flight
 in_stance = np.zeros((4, N), dtype=bool)
 in_stance[:, :N_stance] = True
-# in_stance[:, -2:] = True
 
 
 ###########   JUMP OPTIMIZATION   ###########
@@ -109,21 +108,20 @@ Hd = prog.NewContinuousVariables(3, N-1, "Hd")
 contact_force = [prog.NewContinuousVariables(3, N-1, f"foot{i}_contact_force") for i in range(4)]
 
 ##### Guesses #####
-prog.SetInitialGuess(H, np.zeros((3, N))) # unturned
-prog.SetInitialGuess(Hd, np.zeros((3, N-1))) # not spinning
+prog.SetInitialGuess(H, np.zeros((3, N))) # never turns
 for n in range(N):
-    prog.SetInitialGuess(q[:, n], q0) # joint positions nominal position
-    final = q0[6] - ((q0[6] - 0.125)/T_stance)*(h_stance*(N_stance-1))
-    if n < N_stance:
-        slope = (q0[6] - 0.125)/T_stance
-        t = h_stance*n
-        prog.SetInitialGuess(CoM[:,n], [0,0, q0[6] - slope*t])
-    else:
-        avg_jump_time = (min_jump_time+max_jump_time)/2
-        h_fl = avg_jump_time/N_flight
-        t = h_fl*(n-N_stance)
-        parabola = -0.5*avg_jump_time*gravity[2]*t + 0.5*gravity[2]*(t**2)
-        prog.SetInitialGuess(CoM[:,n], [0,0, final + parabola]) # ballistic parabola in z
+    prog.SetInitialGuess(q[7:, n], q0[7:]) # joint positions nominal position
+#     final = q0[6] - ((q0[6] - 0.125)/T_stance)*(h_stance*(N_stance-1))
+#     if n < N_stance:
+#         slope = (q0[6] - 0.125)/T_stance
+#         t = h_stance*n
+#         prog.SetInitialGuess(CoM[:,n], [0,0, q0[6] - slope*t])
+#     else:
+#         avg_jump_time = (min_jump_time+max_jump_time)/2
+#         h_fl = avg_jump_time/N_flight
+#         t = h_fl*(n-N_stance)
+#         parabola = -0.5*avg_jump_time*gravity[2]*t + 0.5*gravity[2]*(t**2)
+#         prog.SetInitialGuess(CoM[:,n], [0,0, final + parabola]) # ballistic parabola in z
 
 ##### Constraints for all time #####
 for n in range(N):
@@ -133,18 +131,38 @@ for n in range(N):
     prog.AddBoundingBoxConstraint(plant.GetPositionLowerLimits(), plant.GetPositionUpperLimits(), q[:, n])
     # Joint velocity limits
     prog.AddBoundingBoxConstraint(plant.GetVelocityLowerLimits(), plant.GetVelocityUpperLimits(), v[:, n])
+    # Feet should not go below the ground
+    for i in range(4):
+        prog.AddConstraint(
+            PositionConstraint(
+                plant,
+                plant.world_frame(),
+                [-np.inf, -np.inf, 0],
+                [np.inf, np.inf, np.inf],
+                foot_frame[i],
+                foot_in_leg,
+                plant_context,
+            ),
+            q[:, n],
+        )
 
 ##### Initial state constraints #####
-prog.AddBoundingBoxConstraint(q0, q0, q[:,0]) # Joints
-prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, 0]) # CoM position = q0
-prog.AddBoundingBoxConstraint(0, 0, CoMd[:, 0]) # CoM vel = 0
+# position
+# prog.AddBoundingBoxConstraint(0, 0.50, CoM[2, 0])
+prog.AddBoundingBoxConstraint(0, 0.50, q[6, 0])
+# prog.AddLinearEqualityConstraint(CoM[:2, 0], [0,0])
+prog.AddLinearEqualityConstraint(q[4:6, 0], [0,0])
+# prog.AddLinearEqualityConstraint(CoMd[:, 0], [0,0,0])
+prog.AddLinearEqualityConstraint(v[3:6, 0], [0,0,0])
+# angular
+# prog.AddLinearEqualityConstraint(H[:, 0], [0,0,0])
+prog.AddLinearEqualityConstraint(v[:3, 0], [0,0,0])
+# prog.AddLinearEqualityConstraint(Hd[:3, 0], [0,0,0])
 ##### Final state constraints #####
-prog.AddBoundingBoxConstraint([0,0], [0,0], CoM[:2,-1])
-# prog.AddBoundingBoxConstraint(0, 0, CoMd[:, -1]) # CoM vel = 0
-# prog.AddBoundingBoxConstraint([0,0,0], [0,0,0], H[:,-1]) # angular momentum
-
-##### Costs #####
-
+# prog.AddBoundingBoxConstraint([-1,-1], [1,1], CoM[:2, -1])
+prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1])
+# prog.AddBoundingBoxConstraint(0, .55, CoM[2, -1])
+prog.AddBoundingBoxConstraint(0, .55, q[6, -1])
 
 ##### Contact force constraints #####
 for foot in range(4):
@@ -154,11 +172,11 @@ for foot in range(4):
         prog.AddLinearConstraint(-contact_force[foot][0, n] <= mu*contact_force[foot][2, n])
         prog.AddLinearConstraint(contact_force[foot][1, n] <= mu*contact_force[foot][2, n])
         prog.AddLinearConstraint(-contact_force[foot][1, n] <= mu*contact_force[foot][2, n])
-        # Normal force >=0 if in stance 0 otherwise
+        # Normal force >0 if in stance 0 otherwise
         if in_stance[foot, n]:
-            prog.AddBoundingBoxConstraint(0, np.inf, contact_force[foot][2, n])
+            prog.AddBoundingBoxConstraint(0.25*total_mass*9.8, 20*total_mass*9.81, contact_force[foot][2, n])
         else:
-            prog.AddBoundingBoxConstraint(0, 0, contact_force[foot][2, n])
+            prog.AddLinearEqualityConstraint(contact_force[foot][2, n], 0)
 
 ##### Center of mass constraints #####
 # Translational
@@ -220,15 +238,15 @@ for n in range(N-1):
 # Make sure plant obeys CoM constraints
 CoM_constraint_context = [ad_plant.CreateDefaultContext() for _ in range(N)]
 def CoM_constraint(vars, context_index):
-    qv, CoM_, H_ = np.split(vars, [nq+nv, nq+nv+3])
+    qv_, CoM_, H_ = np.split(vars, [nq+nv, nq+nv+3])
     if isinstance(vars[0], AutoDiffXd):
-        if not autoDiffArrayEqual(qv, ad_plant.GetPositionsAndVelocities(CoM_constraint_context[context_index])):
-            ad_plant.SetPositionsAndVelocities(CoM_constraint_context[context_index], qv)
+        if not autoDiffArrayEqual(qv_, ad_plant.GetPositionsAndVelocities(CoM_constraint_context[context_index])):
+            ad_plant.SetPositionsAndVelocities(CoM_constraint_context[context_index], qv_)
         CoM_q = ad_plant.CalcCenterOfMassPositionInWorld(CoM_constraint_context[context_index], [spot])
         H_qv = ad_plant.CalcSpatialMomentumInWorldAboutPoint(CoM_constraint_context[context_index], [spot], CoM_).rotational()
     else:
-        if not np.array_equal(qv, plant.GetPositionsAndVelocities(context[context_index])):
-            plant.SetPositionsAndVelocities(context[context_index], qv)
+        if not np.array_equal(qv_, plant.GetPositionsAndVelocities(context[context_index])):
+            plant.SetPositionsAndVelocities(context[context_index], qv_)
         CoM_q = plant.CalcCenterOfMassPositionInWorld(context[context_index], [spot])
         H_qv = plant.CalcSpatialMomentumInWorldAboutPoint(context[context_index], [spot], CoM_).rotational()
     return np.concatenate((CoM_q - CoM_, H_qv - H_)) # Should be 0
@@ -263,11 +281,11 @@ for n in range(N-1):
 
 ##### Kinematic constraints #####
 def fixed_position_constraint(vars, context_index, frame):
-    q_, qn = np.split(vars, [nq])
+    q_, qn_ = np.split(vars, [nq])
     if not np.array_equal(q_, plant.GetPositions(context[context_index])):
         plant.SetPositions(context[context_index], q_)
-    if not np.array_equal(qn, plant.GetPositions(context[context_index+1])):
-        plant.SetPositions(context[context_index+1], qn)
+    if not np.array_equal(qn_, plant.GetPositions(context[context_index+1])):
+        plant.SetPositions(context[context_index+1], qn_)
     p_WF = plant.CalcPointsPositions(
         context[context_index],
         frame,
@@ -297,61 +315,34 @@ def fixed_position_constraint(vars, context_index, frame):
             plant.world_frame(),
             plant.world_frame(),   
         )
-        return InitializeAutoDiff(p_WF_n - p_WF, J_WF_n@ExtractGradient(qn) - J_WF@ExtractGradient(q_))
+        return InitializeAutoDiff(p_WF_n - p_WF, J_WF_n@ExtractGradient(qn_) - J_WF@ExtractGradient(q_))
     else:
         return p_WF_n - p_WF # Should be 0
-
-for i in range(4):
+    
+for foot in range(4):
     for n in range(N):
-        if in_stance[i, n]:
+        if in_stance[foot, n]:
             # Feet on ground
             prog.AddConstraint(
                 PositionConstraint(
                     plant,
                     plant.world_frame(),
-                    [-np.inf, -np.inf, 0],
-                    [np.inf, np.inf, 0],
-                    foot_frame[i],
+                    [-5, -5, 0],
+                    [5, 5, 0],
+                    foot_frame[foot],
                     foot_in_leg,
-                    context[n],
+                    plant_context,
                 ),
                 q[:, n],
             )
-            # Feet in known positions
-            # prog.AddConstraint(
-            #     PositionConstraint(
-            #         plant,
-            #         plant.world_frame(),
-            #         initial_foot_positions[i],
-            #         initial_foot_positions[i],
-            #         foot_frame[i],
-            #         foot_in_leg,
-            #         context[n],
-            #     ),
-            #     q[:, n],
-            # )
-            # Feet on ground don't move
-            if n>0 and in_stance[i, n-1]:
+            # Feet stationary
+            if n+1 <= N_stance:
                 prog.AddConstraint(
-                    partial(fixed_position_constraint, context_index=n-1, frame=foot_frame[i]),
+                    partial(fixed_position_constraint, context_index=n, frame=foot_frame[i]),
                     lb=[0]*3,
                     ub=[0]*3,
-                    vars=np.concatenate((q[:,n-1], q[:,n])),
+                    vars=np.concatenate((q[:, n], q[:, n+1])),
                 )
-        else:
-            # Feet somewhere off ground
-            prog.AddConstraint(
-                PositionConstraint(
-                    plant,
-                    plant.world_frame(),
-                    [-np.inf, -np.inf, 0],
-                    [np.inf, np.inf, np.inf],
-                    foot_frame[i],
-                    foot_in_leg,
-                    context[n],
-                ),
-                q[:, n],
-            )
 
 ###########   SOLVE   ###########
 snopt = SnoptSolver()
