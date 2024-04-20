@@ -135,13 +135,23 @@ for n in range(N):
     prog.AddBoundingBoxConstraint(plant.GetVelocityLowerLimits(), plant.GetVelocityUpperLimits(), v[:, n])
 
 ##### Initial state constraints #####
-prog.AddBoundingBoxConstraint(q0, q0, q[:,0]) # Joints
-prog.AddBoundingBoxConstraint(q0[4:7], q0[4:7], CoM[:, 0]) # CoM position = q0
-prog.AddBoundingBoxConstraint(0, 0, CoMd[:, 0]) # CoM vel = 0
+# position
+# prog.AddBoundingBoxConstraint(0, 0.55, CoM[2, 0])
+prog.AddBoundingBoxConstraint(0, 0.55, q[6, 0])
+# prog.AddLinearEqualityConstraint(q[7:, 0], q0[7:])
+# prog.AddLinearEqualityConstraint(CoM[:2, 0], [0,0])
+prog.AddLinearEqualityConstraint(q[4:6, 0], [0,0])
+# prog.AddLinearEqualityConstraint(CoMd[:, 0], [0,0,0])
+prog.AddLinearEqualityConstraint(v[3:6, 0], [0,0,0])
+# angular
+# prog.AddLinearEqualityConstraint(H[:, 0], [0,0,0])
+prog.AddLinearEqualityConstraint(v[:3, 0], [0,0,0])
+# prog.AddLinearEqualityConstraint(Hd[:3, 0], [0,0,0])
 ##### Final state constraints #####
-prog.AddBoundingBoxConstraint([0,0], [0,0], CoM[:2,-1])
-# prog.AddBoundingBoxConstraint(0, 0, CoMd[:, -1]) # CoM vel = 0
-# prog.AddBoundingBoxConstraint([0,0,0], [0,0,0], H[:,-1]) # angular momentum
+# prog.AddBoundingBoxConstraint([-1,-1], [1,1], CoM[:2, -1])
+prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1])
+# prog.AddBoundingBoxConstraint(0.2, .55, CoM[2, -1])
+prog.AddBoundingBoxConstraint(0.2, .55, q[6, -1])
 
 ##### Costs #####
 

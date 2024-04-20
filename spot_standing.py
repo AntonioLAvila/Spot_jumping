@@ -79,10 +79,10 @@ initial_foot_positions = [
 
 N_stance = 60
 N_flight = 61
-T_stance = 1.5
+T_stance = 1
 h_stance = T_stance/(N_stance-1)
 max_jump_time = 2
-min_jump_time = 0.25
+min_jump_time = .25
 N = N_stance + N_flight
 in_stance = np.zeros((4, N), dtype=bool)
 in_stance[:, :N_stance] = True
@@ -141,15 +141,16 @@ for n in range(N):
                 [np.inf, np.inf, np.inf],
                 foot_frame[i],
                 foot_in_leg,
-                plant_context,
+                context[n],
             ),
             q[:, n],
         )
 
 ##### Initial state constraints #####
 # position
-# prog.AddBoundingBoxConstraint(0, 0.50, CoM[2, 0])
-prog.AddBoundingBoxConstraint(0, 0.50, q[6, 0])
+# prog.AddBoundingBoxConstraint(0, 0.55, CoM[2, 0])
+prog.AddBoundingBoxConstraint(0, 0.55, q[6, 0])
+# prog.AddLinearEqualityConstraint(q[7:, 0], q0[7:])
 # prog.AddLinearEqualityConstraint(CoM[:2, 0], [0,0])
 prog.AddLinearEqualityConstraint(q[4:6, 0], [0,0])
 # prog.AddLinearEqualityConstraint(CoMd[:, 0], [0,0,0])
@@ -161,8 +162,8 @@ prog.AddLinearEqualityConstraint(v[:3, 0], [0,0,0])
 ##### Final state constraints #####
 # prog.AddBoundingBoxConstraint([-1,-1], [1,1], CoM[:2, -1])
 prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1])
-# prog.AddBoundingBoxConstraint(0, .55, CoM[2, -1])
-prog.AddBoundingBoxConstraint(0, .55, q[6, -1])
+# prog.AddBoundingBoxConstraint(0.2, .55, CoM[2, -1])
+prog.AddBoundingBoxConstraint(0.2, .55, q[6, -1])
 
 ##### Contact force constraints #####
 for foot in range(4):
@@ -174,7 +175,7 @@ for foot in range(4):
         prog.AddLinearConstraint(-contact_force[foot][1, n] <= mu*contact_force[foot][2, n])
         # Normal force >0 if in stance 0 otherwise
         if in_stance[foot, n]:
-            prog.AddBoundingBoxConstraint(0.25*total_mass*9.8, 20*total_mass*9.81, contact_force[foot][2, n])
+            prog.AddBoundingBoxConstraint(0.25*total_mass*9.8, np.inf, contact_force[foot][2, n])
         else:
             prog.AddLinearEqualityConstraint(contact_force[foot][2, n], 0)
 
@@ -225,15 +226,15 @@ def angular_momentum_constraint(vars, context_index):
             )
             torque += np.cross(p_WF.reshape(3) - CoM_, contact_force_[:, i]) # 𝜏 = Σ(c-p) x f
     return Hd_ - torque # Should be 0
-for n in range(N-1):
-    prog.AddConstraint(eq(H[:,n+1], H[:,n] + h[n]*Hd[:,n]))
-    Fn = np.concatenate([contact_force[i][:,n] for i in range(4)])
-    prog.AddConstraint(
-        partial(angular_momentum_constraint, context_index=n),
-        lb=[0]*3,
-        ub=[0]*3,
-        vars=np.concatenate((q[:, n], CoM[:, n], Hd[:, n], Fn)), # h_dot = Σ(c-p) x f = 𝜏
-    )
+# for n in range(N-1):
+#     prog.AddConstraint(eq(H[:,n+1], H[:,n] + h[n]*Hd[:,n]))
+#     Fn = np.concatenate([contact_force[i][:,n] for i in range(4)])
+#     prog.AddConstraint(
+#         partial(angular_momentum_constraint, context_index=n),
+#         lb=[0]*3,
+#         ub=[0]*3,
+#         vars=np.concatenate((q[:, n], CoM[:, n], Hd[:, n], Fn)), # h_dot = Σ(c-p) x f = 𝜏
+#     )
 
 # Make sure plant obeys CoM constraints
 CoM_constraint_context = [ad_plant.CreateDefaultContext() for _ in range(N)]
@@ -331,18 +332,17 @@ for foot in range(4):
                     [5, 5, 0],
                     foot_frame[foot],
                     foot_in_leg,
-                    plant_context,
+                    context[n],
                 ),
                 q[:, n],
             )
-            # Feet stationary
-            if n+1 <= N_stance:
-                prog.AddConstraint(
-                    partial(fixed_position_constraint, context_index=n, frame=foot_frame[foot]),
-                    lb=[0]*3,
-                    ub=[0]*3,
-                    vars=np.concatenate((q[:, n], q[:, n+1])),
-                )
+            # if n > 0 and in_stance[foot, n-1]:
+            #     prog.AddConstraint(
+            #         partial(fixed_position_constraint, context_index=n-1, frame=foot_frame[foot]),
+            #         lb=[0]*3,
+            #         ub=[0]*3,
+            #         vars=np.concatenate((q[:, n-1], q[:, n])),
+            #     )
 
 ###########   SOLVE   ###########
 snopt = SnoptSolver()
