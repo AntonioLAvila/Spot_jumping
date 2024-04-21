@@ -82,7 +82,7 @@ N_flight = 61
 T_stance = 1
 h_stance = T_stance/(N_stance-1)
 max_jump_time = 2
-min_jump_time = .25
+min_jump_time = .5
 N = N_stance + N_flight
 in_stance = np.zeros((4, N), dtype=bool)
 in_stance[:, :N_stance] = True
@@ -105,7 +105,7 @@ CoMd = prog.NewContinuousVariables(3, N, "CoMd")
 CoMdd = prog.NewContinuousVariables(3, N-1, "CoMdd")
 H = prog.NewContinuousVariables(3, N, "H")
 Hd = prog.NewContinuousVariables(3, N-1, "Hd")
-contact_force = [prog.NewContinuousVariables(3, N-1, f"foot{i}_contact_force") for i in range(4)]
+contact_force = [prog.NewContinuousVariables(3, N-1, f"foot{i}_contact_force") for i in range(4)] 
 
 ##### Guesses #####
 prog.SetInitialGuess(H, np.zeros((3, N))) # never turns
@@ -166,8 +166,8 @@ prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1])
 prog.AddBoundingBoxConstraint(0.2, .55, q[6, -1])
 
 ##### Contact force constraints #####
-for foot in range(4):
-    for n in range(N-1):
+for n in range(N-1):
+    for foot in range(4):
         # Friction pyramid
         prog.AddLinearConstraint(contact_force[foot][0, n] <= mu*contact_force[foot][2, n])
         prog.AddLinearConstraint(-contact_force[foot][0, n] <= mu*contact_force[foot][2, n])
@@ -178,6 +178,11 @@ for foot in range(4):
             prog.AddBoundingBoxConstraint(0.25*total_mass*9.8, np.inf, contact_force[foot][2, n])
         else:
             prog.AddLinearEqualityConstraint(contact_force[foot][2, n], 0)
+
+# front and back feet should apply same upward forces
+prog.AddConstraint(eq(contact_force[0][2, :], contact_force[1][2, :]))
+prog.AddConstraint(eq(contact_force[2][2, :], contact_force[3][2, :]))
+
 
 ##### Center of mass constraints #####
 # Translational
@@ -369,10 +374,10 @@ visualizer.StopRecording()
 visualizer.PublishRecording()
 plt.plot(t_sol, result.GetSolution(CoM[2]), label="CoM")
 plt.plot(t_sol, result.GetSolution(q[6]), label="q")
-# plt.plot(t_sol[:-1], result.GetSolution(contact_force[0][2]))
-# plt.plot(t_sol[:-1], result.GetSolution(contact_force[1][2]))
-# plt.plot(t_sol[:-1], result.GetSolution(contact_force[2][2]))
-# plt.plot(t_sol[:-1], result.GetSolution(contact_force[3][2]))
+plt.plot(t_sol[:-1], result.GetSolution(contact_force[0][2]))
+plt.plot(t_sol[:-1], result.GetSolution(contact_force[1][2]))
+plt.plot(t_sol[:-1], result.GetSolution(contact_force[2][2]))
+plt.plot(t_sol[:-1], result.GetSolution(contact_force[3][2]))
 plt.legend(loc="upper left")
 plt.show()
 
