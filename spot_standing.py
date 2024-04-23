@@ -4,7 +4,7 @@ from pid_standing import run_pid_control
 import matplotlib.pyplot as plt
 from functools import partial
 from pydrake.all import (
-    Solve,
+    IpoptSolver,
     DiscreteContactApproximation,
     RobotDiagramBuilder,
     StartMeshcat,
@@ -350,10 +350,10 @@ for foot in range(4):
             #     )
 
 ###########   SOLVE   ###########
-snopt = SnoptSolver()
+solver = IpoptSolver()
 print("Solving")
 start = time.time()
-result = snopt.Solve(prog)
+result = solver.Solve(prog)
 print(result.is_success())
 print("Time to solve:", time.time() - start)
 
