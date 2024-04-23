@@ -105,7 +105,8 @@ CoMd = prog.NewContinuousVariables(3, N, "CoMd")
 CoMdd = prog.NewContinuousVariables(3, N-1, "CoMdd")
 H = prog.NewContinuousVariables(3, N, "H")
 Hd = prog.NewContinuousVariables(3, N-1, "Hd")
-contact_force = [prog.NewContinuousVariables(3, N-1, f"foot{i}_contact_force") for i in range(4)] 
+contact_force = [prog.NewContinuousVariables(3, N-1, f"foot{i}_contact_force") for i in range(4)]
+# TODO try adding feet positions
 
 ##### Guesses #####
 prog.SetInitialGuess(H, np.zeros((3, N))) # never turns
