@@ -4,6 +4,7 @@ from pid_standing import run_pid_control
 import matplotlib.pyplot as plt
 from functools import partial
 from pydrake.all import (
+    IpoptSolver,
     Solve,
     DiscreteContactApproximation,
     RobotDiagramBuilder,
@@ -281,13 +282,13 @@ def fixed_position_constraint(vars, context_index, frame):
     p_WF = plant.CalcPointsPositions(
         context[context_index],
         frame,
-        [0, 0, 0],
+        foot_in_leg,
         plant.world_frame(),
     )
     p_WF_n = plant.CalcPointsPositions(
         context[context_index+1],
         frame,
-        [0, 0, 0],
+        foot_in_leg,
         plant.world_frame(),
     )
     if isinstance(vars[0], AutoDiffXd):
