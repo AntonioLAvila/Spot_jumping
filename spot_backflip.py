@@ -85,10 +85,10 @@ initial_foot_positions = [
 
 N_stance = 60
 N_flight = 61
-T_stance = 1
+T_stance = 1.0
 h_stance = T_stance/(N_stance-1)
 max_jump_time = 2
-min_jump_time = .5
+min_jump_time = 1.
 N = N_stance + N_flight
 in_stance = np.zeros((4, N), dtype=bool)
 in_stance[:, :N_stance] = True
@@ -172,8 +172,8 @@ for n in range(N-1):
             prog.AddLinearEqualityConstraint(contact_force[foot][2, n], 0)
 
 # Front and back feet should apply same upward forces
-prog.AddConstraint(eq(contact_force[0][2, :], contact_force[1][2, :]))
-prog.AddConstraint(eq(contact_force[2][2, :], contact_force[3][2, :]))
+# prog.AddConstraint(eq(contact_force[0][2, :], contact_force[1][2, :]))
+# prog.AddConstraint(eq(contact_force[2][2, :], contact_force[3][2, :]))
 
 
 ##### Center of mass constraints #####
