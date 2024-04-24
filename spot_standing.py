@@ -142,7 +142,7 @@ for n in range(N):
     prog.AddBoundingBoxConstraint(plant.GetPositionLowerLimits(), plant.GetPositionUpperLimits(), q[:, n])
     # Joint velocity limits
     prog.AddBoundingBoxConstraint(plant.GetVelocityLowerLimits(), plant.GetVelocityUpperLimits(), v[:, n])
-
+    # TODO do this the right way
     prog.AddBoundingBoxConstraint(0.2, np.inf, q[6, n])
 
 ##### Initial state constraints #####
@@ -150,8 +150,7 @@ for n in range(N):
 # prog.AddLinearEqualityConstraint(q[7:, 0], q0[7:]) # Joint positions
 prog.AddBoundingBoxConstraint(min_dist_above_ground, 0.55, q[6, 0]) # Height
 prog.AddLinearEqualityConstraint(q[4:6, 0], [0,0]) # x,y
-prog.AddLinearEqualityConstraint(v[3:6, 0], [0,0,0]) # No translational velocity
-prog.AddLinearEqualityConstraint(v[:3, 0], [0,0,0]) # No angular velocity
+prog.AddLinearEqualityConstraint(v[:, 0], np.zeros(18)) # No velocity
 ##### Final state constraints #####
 prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1]) # Land inside unit box
 prog.AddLinearEqualityConstraint(q[7:, -1], q0[7:]) # Joints ready to absorb impact
