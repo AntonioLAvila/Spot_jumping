@@ -113,7 +113,6 @@ CoMdd = prog.NewContinuousVariables(3, N-1, "CoMdd")
 H = prog.NewContinuousVariables(3, N, "H")
 Hd = prog.NewContinuousVariables(3, N-1, "Hd")
 contact_force = [prog.NewContinuousVariables(3, N-1, f"foot{i}_contact_force") for i in range(4)]
-# TODO try adding feet positions
 q_view = PositionView(q)
 v_view = VelocityView(v)
 
@@ -122,17 +121,6 @@ prog.SetInitialGuess(H, np.zeros((3, N)))
 prog.SetInitialGuess(Hd, np.zeros((3, N-1)))
 for n in range(N):
     prog.SetInitialGuess(q[7:, n], q0[7:]) # joint positions nominal position
-    # final = q0[6] - ((q0[6] - 0.125)/T_stance)*(h_stance*(N_stance-1))
-    # if n < N_stance:
-    #     slope = (q0[6] - 0.125)/T_stance
-    #     t = h_stance*n
-    #     prog.SetInitialGuess(CoM[:,n], [0,0, q0[6] - slope*t])
-    # else:
-    #     avg_jump_time = (min_jump_time+max_jump_time)/2
-    #     h_fl = avg_jump_time/N_flight
-    #     t = h_fl*(n-N_stance)
-    #     parabola = -0.5*avg_jump_time*gravity[2]*t + 0.5*gravity[2]*(t**2)
-    #     prog.SetInitialGuess(CoM[:,n], [0,0, final + parabola]) # ballistic parabola in z
 
 ##### Constraints for all time #####
 for n in range(N):
@@ -143,7 +131,7 @@ for n in range(N):
     # Joint velocity limits
     prog.AddBoundingBoxConstraint(plant.GetVelocityLowerLimits(), plant.GetVelocityUpperLimits(), v[:, n])
     # TODO do this the right way
-    prog.AddBoundingBoxConstraint(0.2, np.inf, q[6, n])
+    # prog.AddBoundingBoxConstraint(0.2, np.inf, q[6, n])
 
 ##### Initial state constraints #####
 # Position
@@ -152,10 +140,15 @@ prog.AddBoundingBoxConstraint(min_dist_above_ground, 0.55, q[6, 0]) # Height
 prog.AddLinearEqualityConstraint(q[4:6, 0], [0,0]) # x,y
 prog.AddLinearEqualityConstraint(v[:, 0], np.zeros(18)) # No velocity
 ##### Final state constraints #####
-prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1]) # Land inside unit box
+# prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1]) # Land inside unit box
 prog.AddLinearEqualityConstraint(q[7:, -1], q0[7:]) # Joints ready to absorb impact
-prog.AddLinearEqualityConstraint(q[:4, -1], [0, 0, 0, 1])
+prog.AddLinearEqualityConstraint(q[:4, -1], [0, 0, 0, 1]) # Orientation
 # prog.AddBoundingBoxConstraint(min_dist_above_ground, .55, q[6, -1])
+
+
+##### Backflip Magic #####
+prog.AddLinearEqualityConstraint(q[:4, N_stance + (N_flight//2)], [np.pi, 0, 1, 0])
+
 
 ##### Contact force constraints #####
 for n in range(N-1):
@@ -341,18 +334,32 @@ for foot in range(4):
                     vars=np.concatenate((q[:, n-1], q[:, n])),
                 )
         else:
-            prog.AddConstraint(
-                PositionConstraint(
-                    plant,
-                    plant.world_frame(),
-                    [-np.inf, -np.inf, 0],
-                    [np.inf, np.inf, np.inf],
-                    foot_frame[foot],
-                    foot_in_leg,
-                    context[n],
-                ),
-                q[:, n],
-            )
+            if n < (N_stance + (N_flight//2)):
+                prog.AddConstraint(
+                    PositionConstraint(
+                        plant,
+                        plant.world_frame(),
+                        [-np.inf, -np.inf, 0],
+                        [np.inf, np.inf, np.inf],
+                        foot_frame[foot],
+                        foot_in_leg,
+                        context[n],
+                    ),
+                    q[:, n],
+                )
+            else:
+                prog.AddConstraint(
+                    PositionConstraint(
+                        plant,
+                        plant.world_frame(),
+                        [-np.inf, -np.inf, .5],
+                        [np.inf, np.inf, np.inf],
+                        foot_frame[foot],
+                        foot_in_leg,
+                        context[n],
+                    ),
+                    q[:, n],
+                )
 
 ###########   SOLVE   ###########
 solver = IpoptSolver()
