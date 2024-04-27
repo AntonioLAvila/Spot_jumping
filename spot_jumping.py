@@ -92,6 +92,7 @@ min_jump_time = .5
 N = N_stance + N_flight
 in_stance = np.zeros((4, N), dtype=bool)
 in_stance[:, :N_stance] = True
+in_stance[:, -2:] = True
 min_dist_above_ground = 0.0
 
 
@@ -141,8 +142,6 @@ for n in range(N):
     prog.AddBoundingBoxConstraint(plant.GetPositionLowerLimits(), plant.GetPositionUpperLimits(), q[:, n])
     # Joint velocity limits
     prog.AddBoundingBoxConstraint(plant.GetVelocityLowerLimits(), plant.GetVelocityUpperLimits(), v[:, n])
-    # TODO do this the right way
-    prog.AddBoundingBoxConstraint(0.2, np.inf, q[6, n])
 
 ##### Initial state constraints #####
 # Position
@@ -352,6 +351,19 @@ for foot in range(4):
                 ),
                 q[:, n],
             )
+        # Kees don't go under ground
+        prog.AddConstraint(
+            PositionConstraint(
+                plant,
+                plant.world_frame(),
+                [-np.inf, -np.inf, 0],
+                [np.inf, np.inf, np.inf],
+                foot_frame[foot],
+                [0,0,0],
+                context[n],
+            ),
+            q[:, n],
+        )
 
 ###########   SOLVE   ###########
 solver = IpoptSolver()

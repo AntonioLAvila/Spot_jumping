@@ -360,6 +360,19 @@ for foot in range(4):
                     ),
                     q[:, n],
                 )
+        # Kees don't go under ground
+        prog.AddConstraint(
+            PositionConstraint(
+                plant,
+                plant.world_frame(),
+                [-np.inf, -np.inf, 0],
+                [np.inf, np.inf, np.inf],
+                foot_frame[foot],
+                [0,0,0],
+                context[n],
+            ),
+            q[:, n],
+        )
 
 ###########   SOLVE   ###########
 solver = IpoptSolver()
