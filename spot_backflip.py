@@ -88,7 +88,7 @@ N_flight = 61
 T_stance = 1.0
 h_stance = T_stance/(N_stance-1)
 max_jump_time = 2
-min_jump_time = 1.
+min_jump_time = .5
 N = N_stance + N_flight
 in_stance = np.zeros((4, N), dtype=bool)
 in_stance[:, :N_stance] = True
@@ -130,8 +130,6 @@ for n in range(N):
     prog.AddBoundingBoxConstraint(plant.GetPositionLowerLimits(), plant.GetPositionUpperLimits(), q[:, n])
     # Joint velocity limits
     prog.AddBoundingBoxConstraint(plant.GetVelocityLowerLimits(), plant.GetVelocityUpperLimits(), v[:, n])
-    # TODO do this the right way
-    # prog.AddBoundingBoxConstraint(0.2, np.inf, q[6, n])
 
 ##### Initial state constraints #####
 # Position
@@ -147,7 +145,7 @@ prog.AddLinearEqualityConstraint(q[:4, -1], [0, 0, 0, 1]) # Orientation
 
 
 ##### Backflip Magic #####
-prog.AddLinearEqualityConstraint(q[:4, N_stance + (N_flight//2)], [np.pi, 0, 1, 0])
+# prog.AddLinearEqualityConstraint(q[:4, N_stance + (N_flight//2)], [np.pi, 0, 1, 0])
 
 
 ##### Contact force constraints #####
@@ -334,32 +332,32 @@ for foot in range(4):
                     vars=np.concatenate((q[:, n-1], q[:, n])),
                 )
         else:
-            if n < (N_stance + (N_flight//2)):
-                prog.AddConstraint(
-                    PositionConstraint(
-                        plant,
-                        plant.world_frame(),
-                        [-np.inf, -np.inf, 0],
-                        [np.inf, np.inf, np.inf],
-                        foot_frame[foot],
-                        foot_in_leg,
-                        context[n],
-                    ),
-                    q[:, n],
-                )
-            else:
-                prog.AddConstraint(
-                    PositionConstraint(
-                        plant,
-                        plant.world_frame(),
-                        [-np.inf, -np.inf, .5],
-                        [np.inf, np.inf, np.inf],
-                        foot_frame[foot],
-                        foot_in_leg,
-                        context[n],
-                    ),
-                    q[:, n],
-                )
+            # if n < (N_stance + (N_flight//2)):
+            prog.AddConstraint(
+                PositionConstraint(
+                    plant,
+                    plant.world_frame(),
+                    [-np.inf, -np.inf, 0],
+                    [np.inf, np.inf, np.inf],
+                    foot_frame[foot],
+                    foot_in_leg,
+                    context[n],
+                ),
+                q[:, n],
+            )
+            # else:
+            #     prog.AddConstraint(
+            #         PositionConstraint(
+            #             plant,
+            #             plant.world_frame(),
+            #             [-np.inf, -np.inf, .5],
+            #             [np.inf, np.inf, np.inf],
+            #             foot_frame[foot],
+            #             foot_in_leg,
+            #             context[n],
+            #         ),
+            #         q[:, n],
+            #     )
         # Kees don't go under ground
         prog.AddConstraint(
             PositionConstraint(
