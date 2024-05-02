@@ -138,14 +138,16 @@ prog.AddBoundingBoxConstraint(min_dist_above_ground, 0.55, q[6, 0]) # Height
 prog.AddLinearEqualityConstraint(q[4:6, 0], [0,0]) # x,y
 prog.AddLinearEqualityConstraint(v[:, 0], np.zeros(18)) # No velocity
 ##### Final state constraints #####
-# prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1]) # Land inside unit box
+prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1]) # Land inside unit box
 prog.AddLinearEqualityConstraint(q[7:, -1], q0[7:]) # Joints ready to absorb impact
 prog.AddLinearEqualityConstraint(q[:4, -1], [0, 0, 0, 1]) # Orientation
 # prog.AddBoundingBoxConstraint(min_dist_above_ground, .55, q[6, -1])
 
 
 ##### Backflip Magic #####
-# prog.AddLinearEqualityConstraint(q[:4, N_stance + (N_flight//2)], [np.pi, 0, 1, 0])
+prog.AddLinearEqualityConstraint(q[:4, N_stance + (N_flight//2)], upside_down)
+upside_down = upside_down/np.linalg.norm(upside_down)
+upside_down = np.array([np.pi, 0, 1, 0])
 
 
 ##### Contact force constraints #####
