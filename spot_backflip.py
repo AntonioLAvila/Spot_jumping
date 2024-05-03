@@ -9,7 +9,6 @@ from pydrake.all import (
     RobotDiagramBuilder,
     StartMeshcat,
     MathematicalProgram,
-    SnoptSolver,
     AddUnitQuaternionConstraintOnPlant,
     MeshcatVisualizer,
     OrientationConstraint,
@@ -49,6 +48,9 @@ diagram_context = diagram.CreateDefaultContext()
 plant_context = plant.GetMyContextFromRoot(diagram_context)
 q0 = plant.GetDefaultPositions()
 q0[6] -= 0.02889683
+o = np.array([0, 0, 0, 1])
+o = o/np.linalg.norm(o)
+q0[:4] = o
 plant.SetPositions(plant_context, q0)
 diagram.ForcedPublish(diagram_context)
 
@@ -122,6 +124,13 @@ prog.SetInitialGuess(Hd, np.zeros((3, N-1)))
 for n in range(N):
     prog.SetInitialGuess(q[7:, n], q0[7:]) # joint positions nominal position
 
+    # Flipping motion
+    if n > N_stance:
+        t = n - N_stance + 1
+        # orientation = np.array([0, 0, 0, 0])
+        # prog.SetInitialGuess()
+
+
 ##### Constraints for all time #####
 for n in range(N):
     # Unit quaternions
@@ -133,25 +142,24 @@ for n in range(N):
 
 ##### Initial state constraints #####
 # Position
-# prog.AddLinearEqualityConstraint(q[7:, 0], q0[7:]) # Joint positions
 prog.AddBoundingBoxConstraint(min_dist_above_ground, 0.55, q[6, 0]) # Height
 prog.AddLinearEqualityConstraint(q[4:6, 0], [0,0]) # x,y
 prog.AddLinearEqualityConstraint(v[:, 0], np.zeros(18)) # No velocity
-prog.AddLinearEqualityConstraint(q[:4, -1], [0,0,0,1]) # Orientation
+prog.AddLinearEqualityConstraint(q[:4, 0], [0,0,0,1]) # Orientation
 ##### Final state constraints #####
 # prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1]) # Land inside unit box
 prog.AddLinearEqualityConstraint(q[7:, -1], q0[7:]) # Joints ready to absorb impact
-# prog.AddLinearEqualityConstraint(q[:4, -1], [0, 0, 0, 1]) # Orientation
-prog.AddBoundingBoxConstraint([0, 0, 0, 1], [2*np.pi, 0, 0, 1], q[:4, -1]) # Orientation
-prog.AddBoundingBoxConstraint(min_dist_above_ground, 1.0, q[6, -1])
+prog.AddLinearEqualityConstraint(q[:4, -1], [0, 0, 0, 1]) # Orientation
+# prog.AddBoundingBoxConstraint([0, 0, 0, 1], [2*np.pi, 0, 0, 1], q[:4, -1]) # Orientation
+prog.AddBoundingBoxConstraint(min_dist_above_ground, .5, q[6, -1]) # On ground-ish
 
 
 ##### Backflip Magic #####
 for n in range(N):
-    # pass
-    prog.AddLinearEqualityConstraint(H[0, n], 0)
-    prog.AddLinearEqualityConstraint(H[2, n], 0)
-prog.AddLinearEqualityConstraint(q[:4, N_stance + (N_flight//2)], [0, 0, 1, 0])
+    pass
+    # prog.AddLinearEqualityConstraint(H[0, n], 0)
+    # prog.AddLinearEqualityConstraint(H[2, n], 0)
+prog.AddLinearEqualityConstraint(q[:4, N_stance + (N_flight//2)], [0, 1, 0, 0])
 
 
 ##### Contact force constraints #####
@@ -383,7 +391,7 @@ solver = IpoptSolver()
 print("Solving")
 start = time.time()
 result = solver.Solve(prog)
-print(result.is_success())
+print(f"You're a failure: {result.is_success()}")
 print("Time to solve:", time.time() - start)
 
 ###########   VISUALIZE   ###########
