@@ -92,7 +92,7 @@ min_jump_time = .5
 N = N_stance + N_flight
 in_stance = np.zeros((4, N), dtype=bool)
 in_stance[:, :N_stance] = True
-in_stance[:, -2:] = True
+# in_stance[:, -2:] = True
 min_dist_above_ground = 0.0
 
 
@@ -122,17 +122,17 @@ prog.SetInitialGuess(H, np.zeros((3, N)))
 prog.SetInitialGuess(Hd, np.zeros((3, N-1)))
 for n in range(N):
     prog.SetInitialGuess(q[7:, n], q0[7:]) # joint positions nominal position
-    # final = q0[6] - ((q0[6] - 0.125)/T_stance)*(h_stance*(N_stance-1))
-    # if n < N_stance:
-    #     slope = (q0[6] - 0.125)/T_stance
-    #     t = h_stance*n
-    #     prog.SetInitialGuess(CoM[:,n], [0,0, q0[6] - slope*t])
-    # else:
-    #     avg_jump_time = (min_jump_time+max_jump_time)/2
-    #     h_fl = avg_jump_time/N_flight
-    #     t = h_fl*(n-N_stance)
-    #     parabola = -0.5*avg_jump_time*gravity[2]*t + 0.5*gravity[2]*(t**2)
-    #     prog.SetInitialGuess(CoM[:,n], [0,0, final + parabola]) # ballistic parabola in z
+    final = q0[6] - ((q0[6] - 0.125)/T_stance)*(h_stance*(N_stance-1))
+    if n < N_stance:
+        slope = (q0[6] - 0.125)/T_stance
+        t = h_stance*n
+        prog.SetInitialGuess(CoM[:,n], [0,0, q0[6] - slope*t])
+    else:
+        avg_jump_time = (min_jump_time+max_jump_time)/2
+        h_fl = avg_jump_time/N_flight
+        t = h_fl*(n-N_stance)
+        parabola = -0.5*avg_jump_time*gravity[2]*t + 0.5*gravity[2]*(t**2)
+        prog.SetInitialGuess(CoM[:,n], [0,0, final + parabola]) # ballistic parabola in z
 
 ##### Constraints for all time #####
 for n in range(N):
@@ -149,6 +149,8 @@ for n in range(N):
 prog.AddBoundingBoxConstraint(min_dist_above_ground, 0.55, q[6, 0]) # Height
 prog.AddLinearEqualityConstraint(q[4:6, 0], [0,0]) # x,y
 prog.AddLinearEqualityConstraint(v[:, 0], np.zeros(18)) # No velocity
+prog.AddLinearEqualityConstraint(q[:4, 0], [0, 0, 0, 1])
+
 ##### Final state constraints #####
 prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1]) # Land inside unit box
 prog.AddLinearEqualityConstraint(q[7:, -1], q0[7:]) # Joints ready to absorb impact
@@ -231,7 +233,7 @@ for n in range(N-1):
         vars=np.concatenate((q[:, n], CoM[:, n], Hd[:, n], Fn)), # h_dot = Σ(c-p) x f = 𝜏
     )
 
-# Make sure plant obeys CoM constraints
+# Couple Spot kinematics and CoM dynamics
 CoM_constraint_context = [ad_plant.CreateDefaultContext() for _ in range(N)]
 def CoM_constraint(vars, context_index):
     qv_, CoM_, H_ = np.split(vars, [nq+nv, nq+nv+3])
@@ -388,13 +390,38 @@ for t in t_sol:
     diagram.ForcedPublish(context)
 visualizer.StopRecording()
 visualizer.PublishRecording()
+# Body
+plt.figure(1)
 plt.plot(t_sol, result.GetSolution(CoM[2]), label="CoM")
 plt.plot(t_sol, result.GetSolution(q[6]), label="q")
-plt.plot(t_sol[:-1], result.GetSolution(contact_force[0][2]))
-plt.plot(t_sol[:-1], result.GetSolution(contact_force[1][2]))
-plt.plot(t_sol[:-1], result.GetSolution(contact_force[2][2]))
-plt.plot(t_sol[:-1], result.GetSolution(contact_force[3][2]))
 plt.legend(loc="upper left")
+# Forces
+plt.figure(2)
+plt.plot(t_sol[:-1], result.GetSolution(contact_force[0][2]), label='FL_z')
+plt.plot(t_sol[:-1], result.GetSolution(contact_force[1][2]), label='FR_z')
+plt.plot(t_sol[:-1], result.GetSolution(contact_force[2][2]), label='RL_z')
+plt.plot(t_sol[:-1], result.GetSolution(contact_force[3][2]), label='RR_z')
+plt.legend(loc="upper left")
+# # FL
+# plt.figure(3)
+# plt.plot(t_sol[:-1], result.GetSolution(contact_force[0][0]), label='FL_x')
+# plt.plot(t_sol[:-1], result.GetSolution(contact_force[0][1]), label='FL_y')
+# plt.legend(loc="upper left")
+# # FR
+# plt.figure(4)
+# plt.plot(t_sol[:-1], result.GetSolution(contact_force[1][0]), label='FR_x')
+# plt.plot(t_sol[:-1], result.GetSolution(contact_force[1][1]), label='FR_y')
+# plt.legend(loc="upper left")
+# # RL
+# plt.figure(5)
+# plt.plot(t_sol[:-1], result.GetSolution(contact_force[2][0]), label='RL_x')
+# plt.plot(t_sol[:-1], result.GetSolution(contact_force[2][1]), label='RL_y')
+# plt.legend(loc="upper left")
+# # RR
+# plt.figure(6)
+# plt.plot(t_sol[:-1], result.GetSolution(contact_force[3][0]), label='RR_x')
+# plt.plot(t_sol[:-1], result.GetSolution(contact_force[3][1]), label='RR_y')
+# plt.legend(loc="upper left")
 plt.show()
 
 

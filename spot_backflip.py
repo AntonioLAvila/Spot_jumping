@@ -92,7 +92,7 @@ min_jump_time = .5
 N = N_stance + N_flight
 in_stance = np.zeros((4, N), dtype=bool)
 in_stance[:, :N_stance] = True
-min_dist_above_ground = 0.0
+min_dist_above_ground = 0.1
 
 
 ###########   JUMP OPTIMIZATION   ###########
@@ -137,17 +137,21 @@ for n in range(N):
 prog.AddBoundingBoxConstraint(min_dist_above_ground, 0.55, q[6, 0]) # Height
 prog.AddLinearEqualityConstraint(q[4:6, 0], [0,0]) # x,y
 prog.AddLinearEqualityConstraint(v[:, 0], np.zeros(18)) # No velocity
+prog.AddLinearEqualityConstraint(q[:4, -1], [0,0,0,1]) # Orientation
 ##### Final state constraints #####
-prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1]) # Land inside unit box
+# prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1]) # Land inside unit box
 prog.AddLinearEqualityConstraint(q[7:, -1], q0[7:]) # Joints ready to absorb impact
-prog.AddLinearEqualityConstraint(q[:4, -1], [0, 0, 0, 1]) # Orientation
-# prog.AddBoundingBoxConstraint(min_dist_above_ground, .55, q[6, -1])
+# prog.AddLinearEqualityConstraint(q[:4, -1], [0, 0, 0, 1]) # Orientation
+prog.AddBoundingBoxConstraint([0, 0, 0, 1], [2*np.pi, 0, 0, 1], q[:4, -1]) # Orientation
+prog.AddBoundingBoxConstraint(min_dist_above_ground, 1.0, q[6, -1])
 
 
 ##### Backflip Magic #####
-prog.AddLinearEqualityConstraint(q[:4, N_stance + (N_flight//2)], upside_down)
-upside_down = upside_down/np.linalg.norm(upside_down)
-upside_down = np.array([np.pi, 0, 1, 0])
+for n in range(N):
+    # pass
+    prog.AddLinearEqualityConstraint(H[0, n], 0)
+    prog.AddLinearEqualityConstraint(H[2, n], 0)
+prog.AddLinearEqualityConstraint(q[:4, N_stance + (N_flight//2)], [0, 0, 1, 0])
 
 
 ##### Contact force constraints #####
@@ -165,8 +169,8 @@ for n in range(N-1):
             prog.AddLinearEqualityConstraint(contact_force[foot][2, n], 0)
 
 # Front and back feet should apply same upward forces
-# prog.AddConstraint(eq(contact_force[0][2, :], contact_force[1][2, :]))
-# prog.AddConstraint(eq(contact_force[2][2, :], contact_force[3][2, :]))
+prog.AddConstraint(eq(contact_force[0][2, :], contact_force[1][2, :]))
+prog.AddConstraint(eq(contact_force[2][2, :], contact_force[3][2, :]))
 
 
 ##### Center of mass constraints #####
@@ -397,12 +401,17 @@ for t in t_sol:
     diagram.ForcedPublish(context)
 visualizer.StopRecording()
 visualizer.PublishRecording()
+# Body
+plt.figure(1)
 plt.plot(t_sol, result.GetSolution(CoM[2]), label="CoM")
 plt.plot(t_sol, result.GetSolution(q[6]), label="q")
-plt.plot(t_sol[:-1], result.GetSolution(contact_force[0][2]))
-plt.plot(t_sol[:-1], result.GetSolution(contact_force[1][2]))
-plt.plot(t_sol[:-1], result.GetSolution(contact_force[2][2]))
-plt.plot(t_sol[:-1], result.GetSolution(contact_force[3][2]))
+plt.legend(loc="upper left")
+# Forces
+plt.figure(2)
+plt.plot(t_sol[:-1], result.GetSolution(contact_force[0][2]), label='FL_z')
+plt.plot(t_sol[:-1], result.GetSolution(contact_force[1][2]), label='FR_z')
+plt.plot(t_sol[:-1], result.GetSolution(contact_force[2][2]), label='RL_z')
+plt.plot(t_sol[:-1], result.GetSolution(contact_force[3][2]), label='RR_z')
 plt.legend(loc="upper left")
 plt.show()
 
