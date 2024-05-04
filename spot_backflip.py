@@ -391,7 +391,7 @@ solver = IpoptSolver()
 print("Solving")
 start = time.time()
 result = solver.Solve(prog)
-print(f"You're a failure: {result.is_success()}")
+print(f"You're not a failure: {result.is_success()}")
 print("Time to solve:", time.time() - start)
 
 ###########   VISUALIZE   ###########
