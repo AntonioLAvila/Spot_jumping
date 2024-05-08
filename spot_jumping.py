@@ -149,7 +149,7 @@ for n in range(N):
 prog.AddBoundingBoxConstraint(min_dist_above_ground, 0.55, q[6, 0]) # Height
 prog.AddLinearEqualityConstraint(q[4:6, 0], [0,0]) # x,y
 prog.AddLinearEqualityConstraint(v[:, 0], np.zeros(18)) # No velocity
-prog.AddLinearEqualityConstraint(q[:4, 0], [0, 0, 0, 1])
+prog.AddLinearEqualityConstraint(q[:4, 0], [0, 0, 0, 1]) # IF YOU COMMENT THIS BACK IN AND LEAVE THE SOLVER WITHOUT A GUESS IT TAKES FOREVER
 
 ##### Final state constraints #####
 prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1]) # Land inside unit box
