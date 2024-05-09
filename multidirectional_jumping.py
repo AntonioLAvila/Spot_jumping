@@ -92,7 +92,7 @@ min_jump_time = .5
 N = N_stance + N_flight
 in_stance = np.zeros((4, N), dtype=bool)
 in_stance[:, :N_stance] = True
-min_dist_above_ground = 0.0
+min_dist_above_ground = 0.1
 
 
 ###########   JUMP OPTIMIZATION   ###########
@@ -138,8 +138,9 @@ for n in range(N):
 prog.AddBoundingBoxConstraint(min_dist_above_ground, 0.55, q[6, 0]) # Height
 prog.AddLinearEqualityConstraint(q[4:6, 0], [0,0]) # x,y
 prog.AddLinearEqualityConstraint(v[:, 0], np.zeros(18)) # No velocity
+# prog.AddLinearEqualityConstraint(q[:4, 0], [0, 0, 0, 1])
 ##### Final state constraints #####
-prog.AddBoundingBoxConstraint([-2,-1], [-1,1], q[4:6, -1]) # Land inside unit box
+prog.AddBoundingBoxConstraint([-2,-2], [-1,-1], q[4:6, -1]) # Land inside unit box
 prog.AddLinearEqualityConstraint(q[7:, -1], q0[7:]) # Joints ready to absorb impact
 prog.AddLinearEqualityConstraint(q[:4, -1], [0, 0, 0, 1])
 prog.AddBoundingBoxConstraint(min_dist_above_ground, .55, q[6, -1])
