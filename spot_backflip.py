@@ -48,7 +48,7 @@ diagram_context = diagram.CreateDefaultContext()
 plant_context = plant.GetMyContextFromRoot(diagram_context)
 q0 = plant.GetDefaultPositions()
 q0[6] -= 0.02889683
-o = np.array([0, 0, 0, 1])
+o = np.array([1, 0, 0, 0])
 o = o/np.linalg.norm(o)
 q0[:4] = o
 plant.SetPositions(plant_context, q0)
@@ -145,21 +145,21 @@ for n in range(N):
 prog.AddBoundingBoxConstraint(min_dist_above_ground, 0.55, q[6, 0]) # Height
 prog.AddLinearEqualityConstraint(q[4:6, 0], [0,0]) # x,y
 prog.AddLinearEqualityConstraint(v[:, 0], np.zeros(18)) # No velocity
-prog.AddLinearEqualityConstraint(q[:4, 0], [0,0,0,1]) # Orientation
+# prog.AddLinearEqualityConstraint(q[:4, 0], [1,0,0,0]) # Orientation
 ##### Final state constraints #####
-# prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1]) # Land inside unit box
+prog.AddBoundingBoxConstraint([-1,-1], [1,1], q[4:6, -1]) # Land inside unit box
 prog.AddLinearEqualityConstraint(q[7:, -1], q0[7:]) # Joints ready to absorb impact
-prog.AddLinearEqualityConstraint(q[:4, -1], [0, 0, 0, 1]) # Orientation
+prog.AddLinearEqualityConstraint(q[:4, -1], [1, 0, 0, 0]) # Orientation
 # prog.AddBoundingBoxConstraint([0, 0, 0, 1], [2*np.pi, 0, 0, 1], q[:4, -1]) # Orientation
 prog.AddBoundingBoxConstraint(min_dist_above_ground, .5, q[6, -1]) # On ground-ish
 
 
 ##### Backflip Magic #####
 for n in range(N):
-    pass
-    # prog.AddLinearEqualityConstraint(H[0, n], 0)
-    # prog.AddLinearEqualityConstraint(H[2, n], 0)
-prog.AddLinearEqualityConstraint(q[:4, N_stance + (N_flight//2)], [0, 1, 0, 0])
+    # pass
+    prog.AddLinearEqualityConstraint(H[0, n], 0)
+    prog.AddLinearEqualityConstraint(H[2, n], 0)
+prog.AddLinearEqualityConstraint(q[:4, N_stance + (N_flight//2)], [0, 0, 1, 0])
 
 
 ##### Contact force constraints #####
@@ -177,8 +177,8 @@ for n in range(N-1):
             prog.AddLinearEqualityConstraint(contact_force[foot][2, n], 0)
 
 # Front and back feet should apply same upward forces
-prog.AddConstraint(eq(contact_force[0][2, :], contact_force[1][2, :]))
-prog.AddConstraint(eq(contact_force[2][2, :], contact_force[3][2, :]))
+# prog.AddConstraint(eq(contact_force[0][2, :], contact_force[1][2, :]))
+# prog.AddConstraint(eq(contact_force[2][2, :], contact_force[3][2, :]))
 
 
 ##### Center of mass constraints #####
@@ -391,7 +391,7 @@ solver = IpoptSolver()
 print("Solving")
 start = time.time()
 result = solver.Solve(prog)
-print(f"You're not a failure: {result.is_success()}")
+print(f"{result.is_success()}")
 print("Time to solve:", time.time() - start)
 
 ###########   VISUALIZE   ###########
