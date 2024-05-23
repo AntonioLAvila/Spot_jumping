@@ -8,6 +8,6 @@ I plan to keep working on this. Right now it only plays back Spot's state trajec
 
 Here are some videos:
 
-[jumping In Place](https://youtu.be/xZgBojN-AHM)
-[Backflip](https://youtu.be/URJ_Xu9pcVI) (constraints were broken)
+[jumping In Place](https://youtu.be/xZgBojN-AHM)__
+[Backflip](https://youtu.be/URJ_Xu9pcVI) (constraints were broken)__
 [Multidirectional Jump](https://youtu.be/Y1CfxD9VhYU)
